@@ -57,6 +57,14 @@ ros2 launch physicar_bringup sensors_launch.py
 | `/imu/data` | `sensor_msgs/msg/Imu` | ~162Hz | orientation(쿼터니언)+각속도+선형가속도 |
 | `/imu/mag` | `sensor_msgs/msg/MagneticField` | ~162Hz | 지자기 (실내에서는 신뢰도 낮음, 참고용) |
 
+**⚠️ 실차 IMU 인터페이스 주의사항 (대회 기술 담당자 확인, 2026-08-13)**
+실차 센서 칩은 9축(ICM-20948)이지만, 실차의 `/imu` 토픽은 **6축(자이로+가속도)만 제공하고 50Hz**로 나온다.
+지자기 3축은 별도 `/imu/mag` 토픽으로 온다. 이 연습용 IMU 드라이버는 편의상 `/imu/data.orientation`에
+쿼터니언(자체 센서 퓨전 결과)을 채워서 보내지만, **실차에는 이 필드가 없거나 신뢰할 수 없을 가능성이 높다.**
+→ **`orientation` 필드에 의존하는 로직을 짜지 말 것.** 각속도(`angular_velocity`)와 선형가속도
+(`linear_acceleration`)만 신뢰하고, 자세 추정이 필요하면 직접 상보/칼만 필터를 만들어 쓸 것.
+주기 차이(162Hz vs 실차 50Hz)는 문제 없음(더 빠른 건 상관없음).
+
 **출력 인터페이스(각자 작성할 노드가 최종적으로 내보내야 하는 것)는 아직 미정** — 모터 제어기 인터페이스
 확인되는 대로 이 표에 추가할 것 (예: `/cmd_vel` geometry_msgs/Twist 등).
 
