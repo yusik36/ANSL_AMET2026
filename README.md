@@ -28,7 +28,7 @@ src/
 2. `sudo apt install ros-jazzy-usb-cam ros-dev-tools python3-serial v4l-utils`
 3. 이 저장소 클론 후 빌드:
    ```bash
-   git clone <repo-url> physicar_ws
+   git clone https://github.com/yusik36/ANSL_AMET2026.git physicar_ws
    cd physicar_ws
    rosdep install --from-paths src --ignore-src -r -y
    colcon build --symlink-install
@@ -43,6 +43,10 @@ src/
 ```bash
 ros2 launch physicar_bringup sensors_launch.py
 ```
+
+**알려진 하드웨어 한계**: 라이다+카메라+IMU를 동시에 실행하면 USB 허브 전력 부족으로 장치가
+끊길 수 있다(라이다 모터 기동 순간 전류 스파이크가 다른 USB 장치를 리셋시킴, dmesg로 확인됨).
+자체 전원(self-powered) USB 허브 도입 전까지는 필요한 센서만 개별로 켜서 개발할 것.
 
 ## 토픽 인터페이스 (이 위에서 인지/판단/제어 코드를 개발하면 됨)
 
