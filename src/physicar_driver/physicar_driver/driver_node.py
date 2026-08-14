@@ -30,6 +30,13 @@ MAX_STEERING_RAD = math.radians(20.0)
 STEER_MIN_US, STEER_MAX_US = 1300, 1700
 ESC_MIN_US, ESC_MAX_US = 1350, 1750
 
+# Bench-measured forward throttle deadzone (2026-08-14, fully charged NiMH
+# pack, wheels off ground): 1590us -> no motion, 1605us -> motion. Any
+# commanded pulse in (NEUTRAL_US, ESC_FORWARD_DEADZONE_US) spins the ESC's
+# motor driver but the wheel never actually turns. Re-measure if the battery
+# chemistry/pack changes -- deadzone widens as pack voltage sags.
+ESC_FORWARD_DEADZONE_US = 1600
+
 COMMAND_TIMEOUT_S = 1.0
 SEND_RATE_HZ = 20.0
 
@@ -79,6 +86,17 @@ class PhysicarDriverNode(Node):
         self.last_steering = msg.data
         self.last_steering_time = time.time()
 
+    def speed_to_esc_us(self, speed: float) -> int:
+        speed = clamp(speed, 0.0, MAX_SPEED_MPS)  # reverse untested: clamp to >=0
+        if speed <= 0.0:
+            return NEUTRAL_US
+        frac = speed / MAX_SPEED_MPS
+        # Skip the dead zone entirely: any positive speed must produce an
+        # actually-moving pulse, scaled across the working range instead of
+        # the full (mostly-dead) NEUTRAL_US..ESC_MAX_US range.
+        esc_us = ESC_FORWARD_DEADZONE_US + frac * (ESC_MAX_US - ESC_FORWARD_DEADZONE_US)
+        return int(round(clamp(esc_us, ESC_MIN_US, ESC_MAX_US)))
+
     def send_command(self):
         now = time.time()
         speed_fresh = (now - self.last_speed_time) < COMMAND_TIMEOUT_S
@@ -88,13 +106,10 @@ class PhysicarDriverNode(Node):
             steer_us = NEUTRAL_US
             esc_us = NEUTRAL_US
         else:
-            speed = clamp(self.last_speed, 0.0, MAX_SPEED_MPS)  # reverse untested: clamp to >=0
             steering = clamp(self.last_steering, -MAX_STEERING_RAD, MAX_STEERING_RAD)
 
-            esc_us = int(round(NEUTRAL_US + (speed / MAX_SPEED_MPS) * (ESC_MAX_US - NEUTRAL_US)))
+            esc_us = self.speed_to_esc_us(self.last_speed)
             steer_us = int(round(NEUTRAL_US + (steering / MAX_STEERING_RAD) * (STEER_MAX_US - NEUTRAL_US)))
-
-            esc_us = clamp(esc_us, ESC_MIN_US, ESC_MAX_US)
             steer_us = clamp(steer_us, STEER_MIN_US, STEER_MAX_US)
 
         line = f'S{steer_us},T{esc_us}\n'
