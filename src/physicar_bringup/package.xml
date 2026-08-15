@@ -3,13 +3,17 @@
 <package format="3">
   <name>physicar_bringup</name>
   <version>0.1.0</version>
-  <description>Launches all sensors (lidar, camera, imu) together for the AMET 2026 practice platform</description>
+  <description>Launches all sensors together, and the full perception-judgment-control autonomy stack, for the AMET 2026 practice platform</description>
   <maintainer email="ansl207@example.com">ansl207</maintainer>
   <license>MIT</license>
 
   <exec_depend>sllidar_ros2</exec_depend>
   <exec_depend>usb_cam</exec_depend>
   <exec_depend>physicar_imu</exec_depend>
+  <exec_depend>physicar_driver</exec_depend>
+  <exec_depend>physicar_nav</exec_depend>
+  <exec_depend>physicar_vision</exec_depend>
+  <exec_depend>physicar_judgment</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>
