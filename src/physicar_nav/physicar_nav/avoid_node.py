@@ -22,14 +22,15 @@ owning the wheel:
                                                whatever physicar_vision's lane
                                                node suggested.
 
-Two things likely need calibration on the real chassis before this behaves
-correctly and are called out below with FIXME:
-  - FRONT_OFFSET_DEG: assumes the lidar's zero-angle direction is the
-    vehicle's forward direction. If the lidar is mounted rotated relative
-    to the chassis, set this so (scan_angle + offset) = 0 means forward.
-  - Steering sign: assumes positive /steering turns the same direction as
-    positive scan angle (left, per REP-103/105 convention: CCW is
-    positive). If the car turns the wrong way, flip AVOID_STEER_SIGN.
+FRONT_OFFSET_DEG and AVOID_STEER_SIGN below are CONFIRMED via live bench
+test on the practice chassis (2026-08-14): the practice lidar is mounted
+backwards (scan angle 0 points at the vehicle rear, hence offset=180) and
+positive /steering was found to turn the vehicle toward the scan-angle-negative
+side rather than the REP-103/105-assumed positive side, hence sign=-1.0.
+These are PRACTICE-CHASSIS-SPECIFIC -- the real Physicar almost certainly has
+different lidar mounting and must be re-verified on 2026-08-25, not assumed
+to carry over. Re-run the same manual bench test (point an obstacle at a known
+side, confirm which way the car steers) before trusting these on the real car.
 """
 import math
 
@@ -43,9 +44,9 @@ AVOID_SPEED_MPS = 0.15
 STOP_DISTANCE_M = 0.35
 AVOID_DISTANCE_M = 0.7
 FRONT_HALF_ANGLE_DEG = 30.0
-FRONT_OFFSET_DEG = 0.0        # FIXME: calibrate against actual lidar mounting
+FRONT_OFFSET_DEG = 180.0      # CONFIRMED 2026-08-14 bench test on practice chassis: lidar mounted backwards, scan angle 0 = vehicle REAR. Re-verify on real Physicar.
 AVOID_STEER_DEG = 15.0
-AVOID_STEER_SIGN = 1.0        # FIXME: flip to -1.0 if avoidance turns the wrong way
+AVOID_STEER_SIGN = -1.0       # CONFIRMED 2026-08-14 bench test on practice chassis: +1.0 steered toward the obstacle (wrong), flipped. Re-verify on real Physicar.
 PUBLISH_RATE_HZ = 20.0
 SCAN_STALE_S = 0.5
 
