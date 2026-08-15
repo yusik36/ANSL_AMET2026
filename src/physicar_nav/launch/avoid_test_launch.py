@@ -1,3 +1,9 @@
+"""Lidar-only bench test: lidar + driver + obstacle-avoid + judgment, with the
+judgment node's lane/traffic gates bypassed (no camera in this launch) so the
+car drives straight and only reacts to /scan obstacles -- equivalent to what
+this launch did before physicar_judgment existed, now going through the same
+arbitration node the full stack uses instead of a special-cased direct path.
+"""
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -32,4 +38,15 @@ def generate_launch_description():
         output='screen',
     )
 
-    return LaunchDescription([sllidar_launch, driver_node, avoid_node])
+    judgment_node = Node(
+        package='physicar_judgment',
+        executable='judgment_node',
+        name='judgment_node',
+        output='screen',
+        parameters=[{
+            'require_lane_gate': False,
+            'require_traffic_gate': False,
+        }],
+    )
+
+    return LaunchDescription([sllidar_launch, driver_node, avoid_node, judgment_node])

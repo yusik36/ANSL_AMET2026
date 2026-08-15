@@ -17,7 +17,7 @@ setup(
     zip_safe=True,
     maintainer='ansl207',
     maintainer_email='ansl207@example.com',
-    description='Reactive test node: drive straight, avoid obstacles using /scan',
+    description='Reactive obstacle-avoidance node: /scan -> obstacle/speed_cap + obstacle/steer_override',
     license='MIT',
     tests_require=['pytest'],
     entry_points={

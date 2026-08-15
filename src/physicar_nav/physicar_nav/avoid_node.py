@@ -1,11 +1,26 @@
 #!/usr/bin/env python3
-"""Reactive test node: drive straight at a slow constant speed, steer away
-from whichever side has more clearance when an obstacle enters the front
-cone, stop outright if something gets too close.
+"""Reactive obstacle-avoidance node: watches /scan and decides how much the
+front cone is worth overriding steering for.
 
-Publishes /speed (Float64, m/s) + /steering (Float64, rad) -- the same
-interface physicar_driver_node expects. Does not know about the driver's
-internal deadzone/clamp handling; it just publishes commands.
+Does NOT publish /speed or /steering directly anymore (it used to, in the
+first cut of this node -- see git history). Now it publishes an advisory
+speed cap + a steering override that only applies while something is close
+enough to matter, so a judgment_node (physicar_judgment) can combine it with
+lane-following and the traffic-light gate instead of this node unilaterally
+owning the wheel:
+
+  obstacle/speed_cap       (Float64, m/s)  -- max safe speed right now
+                                               (0 in the stop zone, avoid_speed
+                                               in the avoid zone, forward_speed
+                                               when clear). Always valid.
+  obstacle/steer_override  (Float64, rad)   -- steering to use *only* when
+                                               override_active is true.
+  obstacle/override_active (Bool)           -- true while front_min is inside
+                                               avoid_distance (avoid or stop
+                                               zone), meaning this node's
+                                               steering should win over
+                                               whatever physicar_vision's lane
+                                               node suggested.
 
 Two things likely need calibration on the real chassis before this behaves
 correctly and are called out below with FIXME:
@@ -21,7 +36,7 @@ import math
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Float64
+from std_msgs.msg import Bool, Float64
 
 FORWARD_SPEED_MPS = 0.3      # confirmed above the ESC forward deadzone (2026-08-14 bench test)
 AVOID_SPEED_MPS = 0.15
@@ -65,8 +80,9 @@ class ObstacleAvoidNode(Node):
         self.avoid_steer_rad = math.radians(self.get_parameter('avoid_steer_deg').value)
         self.avoid_steer_sign = self.get_parameter('avoid_steer_sign').value
 
-        self.speed_pub = self.create_publisher(Float64, 'speed', 10)
-        self.steering_pub = self.create_publisher(Float64, 'steering', 10)
+        self.speed_cap_pub = self.create_publisher(Float64, 'obstacle/speed_cap', 10)
+        self.steer_override_pub = self.create_publisher(Float64, 'obstacle/steer_override', 10)
+        self.active_pub = self.create_publisher(Bool, 'obstacle/override_active', 10)
 
         self.last_scan = None
         self.last_scan_time = 0.0
@@ -113,18 +129,22 @@ class ObstacleAvoidNode(Node):
         now = self.get_clock().now().nanoseconds / 1e9
         scan = self.last_scan
         if scan is None or (now - self.last_scan_time) > SCAN_STALE_S:
-            self.publish(0.0, 0.0)
+            # No/stale lidar data: don't advise a nonzero speed cap, and don't
+            # claim steering authority either -- judgment_node treats a stale
+            # obstacle/* input as "can't trust the safety layer" and stops
+            # regardless of override_active, so this is belt-and-suspenders.
+            self.publish(0.0, 0.0, False)
             return
 
         front_min, left_avg, right_avg = self.front_min_and_sides(scan)
 
         if front_min is None:
             # Nothing detected in the front cone within range: treat as clear.
-            self.publish(self.forward_speed, 0.0)
+            self.publish(self.forward_speed, 0.0, False)
             return
 
         if front_min < self.stop_distance:
-            self.publish(0.0, 0.0)
+            self.publish(0.0, 0.0, True)
             return
 
         if front_min < self.avoid_distance:
@@ -134,14 +154,15 @@ class ObstacleAvoidNode(Node):
             steer = self.avoid_steer_rad * self.avoid_steer_sign
             if right_room > left_room:
                 steer = -steer
-            self.publish(self.avoid_speed, steer)
+            self.publish(self.avoid_speed, steer, True)
             return
 
-        self.publish(self.forward_speed, 0.0)
+        self.publish(self.forward_speed, 0.0, False)
 
-    def publish(self, speed: float, steering: float):
-        self.speed_pub.publish(Float64(data=speed))
-        self.steering_pub.publish(Float64(data=steering))
+    def publish(self, speed_cap: float, steer_override: float, override_active: bool):
+        self.speed_cap_pub.publish(Float64(data=speed_cap))
+        self.steer_override_pub.publish(Float64(data=steer_override))
+        self.active_pub.publish(Bool(data=override_active))
 
 
 def main():
@@ -153,7 +174,7 @@ def main():
         pass
     finally:
         try:
-            node.publish(0.0, 0.0)
+            node.publish(0.0, 0.0, True)
         except Exception:
             pass
         node.destroy_node()

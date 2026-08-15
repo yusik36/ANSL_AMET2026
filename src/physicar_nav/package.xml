@@ -3,7 +3,7 @@
 <package format="3">
   <name>physicar_nav</name>
   <version>0.1.0</version>
-  <description>Reactive obstacle-avoidance test node: subscribes /scan, publishes /speed + /steering</description>
+  <description>Reactive obstacle-avoidance node: subscribes /scan, publishes obstacle/speed_cap + obstacle/steer_override + obstacle/override_active for physicar_judgment to arbitrate</description>
   <maintainer email="ansl207@example.com">ansl207</maintainer>
   <license>MIT</license>
 
