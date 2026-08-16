@@ -56,15 +56,17 @@ ros2 launch physicar_bringup sensors_launch.py
 
 | 토픽 | 메시지 타입 | 발행 주기 | 설명 |
 |---|---|---|---|
-| `/scan` | `sensor_msgs/msg/LaserScan` | ~10Hz | RPLidar A1, 360도, 최대 12m |
-| `/image_raw` | `sensor_msgs/msg/Image` | ~30Hz | ELP USB 카메라, 1280x720 |
+| `/scan` | `sensor_msgs/msg/LaserScan` | ~10Hz | RPLidar A1, 360도, 최대 12m (실차는 C1, 토픽명 동일) |
+| `/image_raw` | `sensor_msgs/msg/Image` | ~30Hz | ELP USB 카메라, 1280x720 — **⚠️ 실차는 `/camera/image_raw`** (2026-08-16 공식 소스로 확인, 네임스페이스 다름). `physicar_vision`은 `image_topic` launch 인자로 이 차이를 흡수함 (`vision_launch.py` 참고) |
 | `/imu/data` | `sensor_msgs/msg/Imu` | ~162Hz | orientation(쿼터니언)+각속도+선형가속도 |
 | `/imu/mag` | `sensor_msgs/msg/MagneticField` | ~162Hz | 지자기 (실내에서는 신뢰도 낮음, 참고용) |
 
-**⚠️ 실차 IMU 인터페이스 주의사항 (대회 기술 담당자 확인, 2026-08-13)**
-실차 센서 칩은 9축(ICM-20948)이지만, 실차의 `/imu` 토픽은 **6축(자이로+가속도)만 제공하고 50Hz**로 나온다.
-지자기 3축은 별도 `/imu/mag` 토픽으로 온다. 이 연습용 IMU 드라이버는 편의상 `/imu/data.orientation`에
-쿼터니언(자체 센서 퓨전 결과)을 채워서 보내지만, **실차에는 이 필드가 없거나 신뢰할 수 없을 가능성이 높다.**
+**⚠️ 실차 IMU 인터페이스 주의사항 (대회 기술 담당자 확인 2026-08-13, 공식 소스코드로 재확인 2026-08-16)**
+실차 센서 칩은 9축이지만, 실차의 `/imu` 토픽은 **6축(자이로+가속도)만 제공하고 50Hz**로 나온다.
+지자기 3축은 별도 `/imu/mag` 토픽으로 온다. `physicar_driver_node.cpp`에서 직접 확인됨:
+`msg.orientation_covariance[0] = -1.0`으로 명시적으로 세팅함 — 이건 ROS 표준 관례로 "orientation
+추정값 없음/신뢰 불가"를 뜻한다. 이 연습용 IMU 드라이버는 편의상 `/imu/data.orientation`에 쿼터니언
+(자체 센서 퓨전 결과)을 채워서 보내지만, **실차에는 이 필드가 없다(공식 확인됨, 추측 아님).**
 → **`orientation` 필드에 의존하는 로직을 짜지 말 것.** 각속도(`angular_velocity`)와 선형가속도
 (`linear_acceleration`)만 신뢰하고, 자세 추정이 필요하면 직접 상보/칼만 필터를 만들어 쓸 것.
 주기 차이(162Hz vs 실차 50Hz)는 문제 없음(더 빠른 건 상관없음).
@@ -81,17 +83,21 @@ ros2 launch physicar_bringup sensors_launch.py
 
 이 두 토픽을 실차의 `physicar_driver_node`가 구독해서 UART로 확장보드(ESC+서보)에 내려보낸다.
 
-**클램프/안전장치는 드라이버 노드(SDK 계층)에 이미 하드코딩되어 있어서 우리 코드가 직접 구현할 필요 없음:**
+**클램프/안전장치는 드라이버 노드(SDK 계층)에 이미 하드코딩되어 있어서 우리 코드가 직접 구현할 필요 없음
+(2026-08-16, 공식 `physicar_driver_node.cpp`/`driver_params.yaml` 소스코드로 재확인 — 담당자에게
+전해들은 값과 전부 일치):**
 - 최대 속도 **3.0 m/s**, 최대 조향각 **±20°** — 초과값은 자동 클램프
+- ESC 데드존(공식 파라미터 `min_speed`) **0.3 m/s** — 이보다 작은 speed 명령은 사실상 무반응
 - 서보 각도 0–180° 클램프 + 채널별 리밋, ESC 듀티 범위 클램프, 배터리 전압 보상
-- **명령 유효시간 1초** — 그 안에 갱신 안 되면 자동 정지(워치독). 즉 판단 노드는 최소 1Hz보다는 빠르게 계속 퍼블리시해야 함
+- **명령 유효시간(`cmd_timeout`) 1초** — 그 안에 갱신 안 되면 speed는 자동 0으로(steering은 마지막 값 유지, 재중앙정렬 안 됨). 판단 노드는 최소 1Hz보다는 빠르게 계속 퍼블리시해야 함
+- 휠베이스 **0.18m**, 트랙폭 0.16m, 휠 반지름 0.0375m — 공식 값
 - 시뮬레이터도 동일 상수(3.0 m/s, ±20°)로 동작
 
-**⚠️ `/cmd_vel`(Twist) 관련 주의**: 시뮬레이터는 편의상 외부 `/cmd_vel`도 받아서
-내부적으로 `steering = atan(ω·L/v)` (휠베이스 L=0.18m)로 변환 후 위 클램프를 거쳐 처리한다.
-**이건 시뮬레이터 한정 편의 기능으로 보이며, 실차의 `physicar_driver_node`가 `/cmd_vel`도
-지원하는지는 확인 안 됨.** 안전하게 가려면 처음부터 `/speed` + `/steering`으로 직접 퍼블리시하는
-노드를 짤 것 — 시뮬레이터에서만 되고 실차에서 안 되는 상황을 피하기 위함.
+**`/cmd_vel`(Twist) — 2026-08-16 공식 소스코드로 확인**: 실차의 `physicar_driver_node`도
+`/cmd_vel`을 직접 구독하며, 시뮬레이터와 동일하게 `steering = atan(ω·L/v)` (휠베이스 L=0.18m,
+공식 값 확인됨)로 변환해 같은 클램프를 거쳐 처리한다. 즉 `/cmd_vel`을 써도 실차에서 문제없이
+동작한다 — 다만 이 저장소는 처음부터 `/speed`+`/steering` 직접 퍼블리시로 설계했고 그게 더
+명시적이라 그대로 유지한다.
 
 **우리 연습용 플랫폼(RC카+Arduino+ESC)에도 이 인터페이스(`/speed`, `/steering` 구독,
 동일 클램프 적용)를 그대로 구현한 드라이버 노드가 있다** — `physicar_driver/driver_node.py`,
@@ -153,13 +159,35 @@ ros2 run physicar_vision lane_follow_node --ros-args -p h_min:=<값> -p s_max:=<
 
 | 항목 | 위치 | 비고 |
 |---|---|---|
-| 라이다 장착각 보정 | `physicar_nav` 파라미터 `front_offset_deg` | avoid_node.py 모듈 docstring 참고 |
-| 회피 조향 부호 | `physicar_nav` 파라미터 `avoid_steer_sign` | 반대로 돌면 -1.0으로 플립 |
+| 카메라 토픽 네임스페이스 | `real_autonomy_launch.py`의 `image_topic` 인자 | ✅ 해결됨(2026-08-16) — `/camera/image_raw`로 이미 remap되어 있음, 추가 조치 불필요 |
+| 라이다 장착각 보정 | `physicar_nav` 파라미터 `front_offset_deg` | 연습 섀시 전용 실측값(180°)이 들어있음 — 실차는 다를 수 있으므로 재측정 필수. avoid_node.py 모듈 docstring 참고 |
+| 회피 조향 부호 | `physicar_nav` 파라미터 `avoid_steer_sign` | 연습 섀시 전용 실측값(-1.0) — 실차에서 반대로 돌면 다시 플립 |
 | 차선 HSV 임계값 | `physicar_vision` 파라미터 `h_min/h_max/s_max/v_min` | `hsv_calibrate_node`로 실측, 8/18 코스 공개 후 1차 보정, 8/25 실차 인수 후 재보정 |
 | 차선 조향 부호 | `physicar_vision` 파라미터 `lane_steer_sign` | 반대로 돌면 -1.0으로 플립 |
 | 신호등 HSV 임계값 | `physicar_vision` 파라미터 `sat_min/val_min` | 실제 조명/노출 환경에서 재확인 |
-| 카메라 화각/왜곡 | (미보정) | 연습 카메라(ELP, 화각 미확인)와 실차 카메라(100°)가 다름 — ROI 비율(`roi_top_frac` 등) 재조정 필요할 수 있음 |
-| IMU orientation 필드 | (해당 없음, 의도적으로 미사용) | 실차 `/imu`는 6축뿐 — 위 "실차 IMU 인터페이스 주의사항" 참고, 이 파이프라인은 애초에 orientation을 안 씀 |
+| 카메라 화각/왜곡 | (미보정) | 실차 카메라 공식 스펙(2026-08-16 확인): OV5647, IR-cut 없음, 640x480 캡처→480x360 출력, ~15fps, FOV 약 98°(undistort.dist_scale=0.7 기준). 연습 카메라(ELP)와 여전히 다르므로 ROI 비율(`roi_top_frac` 등) 재조정 필요할 수 있음 |
+| IMU orientation 필드 | (해당 없음, 의도적으로 미사용) | 실차 `/imu`는 6축뿐, `orientation_covariance[0]=-1`로 공식 확인됨 — 이 파이프라인은 애초에 orientation을 안 씀 |
+
+### 실차 배포 — myapp.sh (2026-08-16 공식 소스코드로 확인)
+
+**팀 코드는 `/opt/physicar/userdata/myapp.sh`에 넣는다.** 실차 웹 UI(`:5000`, "MyApp" 패널)에서
+bash 스크립트를 업로드하면 `physicar-myapp.service`(systemd, 실패 시 자동 재시작)가 그 스크립트를
+실행한다. 핵심 SW(`physicar_driver_node`, 카메라/라이다 드라이버 등)는 절대 안 건드리고 이 슬롯에만
+배포하면 되므로 "SW 임의 변경 금지" 규정과 무관하다 — 대회 설계 자체가 이 슬롯을 통한 팀 로직
+경쟁을 의도하고 있다.
+
+myapp.sh에 넣을 내용 (예상, 실차 인수 후 확정):
+```bash
+#!/bin/bash
+source /opt/physicar/install/setup.bash   # 실차 워크스페이스 경로는 인수 시 확인
+source ~/physicar_ws/install/setup.bash   # 우리 팀 패키지
+ros2 launch physicar_bringup real_autonomy_launch.py
+```
+
+**주의**: 실차는 센서(카메라/라이다/IMU)와 `physicar_driver_node`가 이미 시스템 서비스로 떠있는
+상태다. `autonomy_launch.py`(연습용, sensors_launch.py+우리 driver_node까지 같이 띄움)를 그대로
+쓰면 안 되고, **`real_autonomy_launch.py`**(인지/판단 노드만 띄움, 카메라 토픽 remap 포함)를 써야
+한다.
 
 ## 하드웨어 접근이 없는 팀원용 개발 방법
 
