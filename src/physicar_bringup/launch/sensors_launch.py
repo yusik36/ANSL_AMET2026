@@ -20,6 +20,7 @@ def generate_launch_description():
                 'sllidar_a1_launch.py',
             )
         ),
+        launch_arguments={'serial_port': '/dev/ttyUSB2'}.items(),
     )
 
     imu_launch = IncludeLaunchDescription(
