@@ -45,14 +45,26 @@ from cv_bridge import CvBridge, CvBridgeError
 ROI_TOP_FRAC = 0.6
 ROI_BOTTOM_FRAC = 1.0
 
-# Placeholder HSV thresholds for "bright/light line on a darker floor".
-# OpenCV hue range is 0-179. FIXME: retune after 2026-08-18 track reveal
-# (and again against the real venue lighting on 2026-08-25) via
-# hsv_calibrate_node -- see README calibration checklist.
-HSV_H_MIN = 0
-HSV_H_MAX = 179
-HSV_S_MAX = 80          # low saturation = whitish/grayish, not a strong color
-HSV_V_MIN = 170         # high value = bright
+# HSV thresholds. OpenCV hue range is 0-179. All six bounds are parameters so
+# any marking colour can be targeted without code changes -- a low-saturation
+# window (s_min=0, s_max~80, v_min high) tracks a white/grey line, a
+# high-saturation window (s_min high) tracks a strongly coloured one.
+#
+# Defaults below are MEASURED off the simulator's "AMET 2026" track on
+# 2026-08-18: its centre dashes are strong orange, sampled at H=18 S=247 V=227
+# against a dark grey road surface. The window is padded generously around
+# that so it survives lighting differences.
+#
+# FIXME: the main-round track is only revealed on race day and may not use
+# orange dashes at all (see README "트랙 일반화"). Re-measure with
+# hsv_calibrate_node on 2026-08-25 and override via launch/params rather than
+# assuming these carry over.
+HSV_H_MIN = 5
+HSV_H_MAX = 35
+HSV_S_MIN = 120         # high saturation = a strongly coloured marking
+HSV_S_MAX = 255
+HSV_V_MIN = 120
+HSV_V_MAX = 255
 
 MIN_VALID_AREA_PX = 300  # below this, treat the frame as "lane not found"
 MAX_STEER_DEG = 20.0      # mirrors the real driver's hard clamp, belt-and-suspenders
@@ -66,8 +78,10 @@ class LaneFollowNode(Node):
 
         self.declare_parameter('h_min', HSV_H_MIN)
         self.declare_parameter('h_max', HSV_H_MAX)
+        self.declare_parameter('s_min', HSV_S_MIN)
         self.declare_parameter('s_max', HSV_S_MAX)
         self.declare_parameter('v_min', HSV_V_MIN)
+        self.declare_parameter('v_max', HSV_V_MAX)
         self.declare_parameter('roi_top_frac', ROI_TOP_FRAC)
         self.declare_parameter('roi_bottom_frac', ROI_BOTTOM_FRAC)
         self.declare_parameter('min_valid_area_px', MIN_VALID_AREA_PX)
@@ -76,8 +90,10 @@ class LaneFollowNode(Node):
 
         self.h_min = self.get_parameter('h_min').value
         self.h_max = self.get_parameter('h_max').value
+        self.s_min = self.get_parameter('s_min').value
         self.s_max = self.get_parameter('s_max').value
         self.v_min = self.get_parameter('v_min').value
+        self.v_max = self.get_parameter('v_max').value
         self.roi_top_frac = self.get_parameter('roi_top_frac').value
         self.roi_bottom_frac = self.get_parameter('roi_bottom_frac').value
         self.min_valid_area_px = self.get_parameter('min_valid_area_px').value
@@ -93,9 +109,10 @@ class LaneFollowNode(Node):
         self.create_subscription(Image, 'image_raw', self.on_image, qos_profile_sensor_data)
 
         self.get_logger().info(
-            f'lane_follow_node ready: HSV placeholder H[{self.h_min}-{self.h_max}] '
-            f'S<{self.s_max} V>{self.v_min} -- retune via hsv_calibrate_node once '
-            f'the real track surface/lighting is known'
+            f'lane_follow_node ready: HSV H[{self.h_min}-{self.h_max}] '
+            f'S[{self.s_min}-{self.s_max}] V[{self.v_min}-{self.v_max}] -- '
+            f'defaults measured off the simulator track, re-measure with '
+            f'hsv_calibrate_node on the real venue'
         )
 
     def on_image(self, msg: Image):
@@ -114,8 +131,8 @@ class LaneFollowNode(Node):
             return
 
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        lower = np.array([self.h_min, 0, self.v_min], dtype=np.uint8)
-        upper = np.array([self.h_max, self.s_max, 255], dtype=np.uint8)
+        lower = np.array([self.h_min, self.s_min, self.v_min], dtype=np.uint8)
+        upper = np.array([self.h_max, self.s_max, self.v_max], dtype=np.uint8)
         mask = cv2.inRange(hsv, lower, upper)
 
         kernel = np.ones((MORPH_KERNEL, MORPH_KERNEL), np.uint8)
