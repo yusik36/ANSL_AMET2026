@@ -21,6 +21,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 
@@ -37,7 +38,7 @@ class HsvCalibrateNode(Node):
 
         self.bridge = CvBridge()
         self.latest_frame = None
-        self.create_subscription(Image, 'image_raw', self.on_image, 10)
+        self.create_subscription(Image, 'image_raw', self.on_image, qos_profile_sensor_data)
         self.create_timer(SAMPLE_PERIOD_S, self.sample)
         self.get_logger().info(
             f'hsv_calibrate_node ready: sampling a center box '

@@ -45,6 +45,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, String
 from cv_bridge import CvBridge, CvBridgeError
@@ -79,7 +80,9 @@ class TrafficLightNode(Node):
         self.bridge = CvBridge()
         self.state_pub = self.create_publisher(String, 'traffic/light_state', 10)
         self.valid_pub = self.create_publisher(Bool, 'traffic/valid', 10)
-        self.create_subscription(Image, 'image_raw', self.on_image, 10)
+        # See lane_follow_node.py: sensor QoS avoids a DDS reliability
+        # mismatch against a best-effort camera publisher (2026-08-18).
+        self.create_subscription(Image, 'image_raw', self.on_image, qos_profile_sensor_data)
 
         self.last_image_time = 0.0
         self.published_state = 'NONE'

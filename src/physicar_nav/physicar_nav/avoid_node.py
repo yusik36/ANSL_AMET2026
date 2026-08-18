@@ -36,6 +36,7 @@ import math
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, Float64
 
@@ -87,7 +88,14 @@ class ObstacleAvoidNode(Node):
 
         self.last_scan = None
         self.last_scan_time = 0.0
-        self.create_subscription(LaserScan, 'scan', self.on_scan, 10)
+        # Real Physicar publishes /scan best-effort (confirmed via official
+        # physicar-ros docs, 2026-08-18); a default-QoS (reliable) subscriber
+        # is INCOMPATIBLE with a best-effort publisher in DDS and silently
+        # receives nothing, which made speed_cap stick at 0.0 forever (see
+        # on_tick's "no scan" branch) -- i.e. the car would never move at all
+        # on the real vehicle. qos_profile_sensor_data is safe to use even
+        # against a reliable publisher (e.g. the practice sllidar_ros2 driver).
+        self.create_subscription(LaserScan, 'scan', self.on_scan, qos_profile_sensor_data)
         self.create_timer(1.0 / PUBLISH_RATE_HZ, self.on_tick)
 
         self.get_logger().info(

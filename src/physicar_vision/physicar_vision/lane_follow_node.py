@@ -34,6 +34,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float64
 from cv_bridge import CvBridge, CvBridgeError
@@ -86,7 +87,10 @@ class LaneFollowNode(Node):
         self.bridge = CvBridge()
         self.steering_pub = self.create_publisher(Float64, 'lane/steering', 10)
         self.valid_pub = self.create_publisher(Bool, 'lane/valid', 10)
-        self.create_subscription(Image, 'image_raw', self.on_image, 10)
+        # Real Physicar's camera driver is expected to publish sensor QoS
+        # (best-effort); a default-QoS subscriber would be DDS-incompatible
+        # with that and silently receive nothing (2026-08-18).
+        self.create_subscription(Image, 'image_raw', self.on_image, qos_profile_sensor_data)
 
         self.get_logger().info(
             f'lane_follow_node ready: HSV placeholder H[{self.h_min}-{self.h_max}] '
