@@ -59,7 +59,14 @@ RED1_H = (0, 8)
 RED2_H = (170, 179)
 YELLOW_H = (18, 35)
 GREEN_H = (45, 85)
-SAT_MIN = 100
+# sat_min=100 let large low-saturation background surfaces (green track mat,
+# tan wood door/paneling -- both ~S100-160 under this room's lighting)
+# out-area the genuine light and win classify()'s argmax, confirmed
+# 2026-08-18 on the practice rig with an actual lit red signal in frame
+# (real light held S up to 255; background never exceeded ~160). Raising
+# this to 150 keeps both false positives under min_blob_area_px while still
+# clearing it for the real light by a comfortable margin (142px vs 80).
+SAT_MIN = 150
 VAL_MIN = 100
 
 
