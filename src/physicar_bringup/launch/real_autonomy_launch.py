@@ -20,18 +20,26 @@ physicar-ros source and a live `ros2 topic list`, 2026-08-16):
   - /scan, /imu, /speed, /steering topic names already match the practice
     platform, no remapping needed for those.
 
-Still placeholder/unverified going into this (see README calibration
-checklist): lane HSV thresholds, front_offset_deg/avoid_steer_sign (these are
-practice-chassis-specific and were never re-measured on the real car).
+Driving is physicar_planner: it reads the drivable corridor from the camera
+and treats a cone as a place where that corridor narrows, so there is no
+separate avoidance layer to hand control to and take it back from. The lane
+follower and avoid_node it replaced are still in the tree as a fallback, but
+nothing here starts them.
+
+Only the traffic light is still taken from physicar_vision -- it answers a
+different question (may the car move at all) and gates speed alone.
+
+Measured in the simulator on 2026-08-18 and baked into the planner defaults:
+the corridor is trustworthy to 2.5 m, and road/grass/cone separate cleanly by
+hue and saturation. Both need re-measuring at the real venue -- the colours
+under its lighting with hsv_calibrate_node, and the camera geometry with
+tools/YS_perception_probe.py.
 """
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
-                            OpaqueFunction)
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
-import os
 
 
 # Tunables worth sweeping between benchmark runs, exposed as launch
@@ -39,17 +47,20 @@ import os
 # them, so `ros2 param set` on a running node has no effect -- an override has
 # to arrive at launch time. Empty means "leave the node's own default alone".
 TUNABLES = {
-    'obstacle_avoid_node': (
-        'physicar_nav', 'avoid_node',
-        ('forward_speed', 'avoid_speed', 'stop_distance', 'avoid_distance',
-         'front_offset_deg', 'avoid_steer_deg', 'avoid_steer_sign'),
+    'planner_node': (
+        'physicar_planner', 'planner_node',
+        ('aggression', 'lookahead_gain', 'lookahead_base', 'max_range',
+         'max_lateral_slope', 'block_h_min', 'block_h_max', 'block_s_min',
+         'speed_cap', 'debug'),
     ),
     'judgment_node': (
         'physicar_judgment', 'judgment_node',
-        ('require_lane_gate', 'require_traffic_gate', 'lane_hold_s',
-         'input_stale_s'),
+        ('require_traffic_gate', 'plan_hold_s', 'input_stale_s'),
     ),
 }
+
+# Counts, not distances -- rclpy rejects a float for an integer parameter.
+INT_PARAMS = ('block_h_min', 'block_h_max', 'block_s_min', 'samples')
 
 
 def parse_override(text):
@@ -86,13 +97,20 @@ def _build(context, *_args, **_kwargs):
         for n in names:
             value = parse_override(LaunchConfiguration(n).perform(context))
             if value is not None:
+                if n in INT_PARAMS and isinstance(value, float):
+                    value = int(value)
                 params[n] = value
+        remaps = []
+        if node_name == 'planner_node':
+            remaps = [('image_raw',
+                       LaunchConfiguration('image_topic').perform(context))]
         nodes.append(Node(
             package=pkg,
             executable=executable,
             name=node_name,
             output='screen',
             parameters=[params] if params else [],
+            remappings=remaps,
         ))
     return nodes
 
@@ -110,11 +128,12 @@ def generate_launch_description():
                             % (n, node_name),
             ))
 
-    vision_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory('physicar_vision'), 'launch', 'vision_launch.py')
-        ),
-        launch_arguments={'image_topic': LaunchConfiguration('image_topic')}.items(),
+    traffic_light = Node(
+        package='physicar_vision',
+        executable='traffic_light_node',
+        name='traffic_light_node',
+        output='screen',
+        remappings=[('image_raw', LaunchConfiguration('image_topic'))],
     )
 
-    return LaunchDescription(args + [vision_launch, OpaqueFunction(function=_build)])
+    return LaunchDescription(args + [traffic_light, OpaqueFunction(function=_build)])
