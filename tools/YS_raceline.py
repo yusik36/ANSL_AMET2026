@@ -30,8 +30,9 @@ undrivable in the one place that decides whether there is a lap at all.
 18.0 deg for about 1.4 s of lap time. Two rounds is the sweet spot; more
 starts costing radius again.
 
-    python3 tools/YS_raceline.py <route.npy>
-    python3 tools/YS_raceline.py <route.npy> --minmax 2 --save line.npy
+    python3 tools/YS_raceline.py                     # current sim world
+    python3 tools/YS_raceline.py --minmax 2 --save line.npy
+    python3 tools/YS_raceline.py some_route.npy      # a file instead
 """
 import argparse
 import math
@@ -47,7 +48,36 @@ CAR_HALF_WIDTH = 0.08           # track_width 0.16 m, from the URDF
 
 # --------------------------------------------------------------------------
 
+def load_route_api(base='http://localhost/sim/api'):
+    """Track geometry from the running simulator.
+
+    Preferred over a route file on disk. The bundle captured on 2026-08-16
+    predates the course reveal, so its world is a sample -- analysing it
+    produced a racing line for a 35.56 m track that does not exist. Asking
+    the simulator what is loaded cannot drift like that.
+    """
+    import json
+    import urllib.request
+    with urllib.request.urlopen(base + '/world', timeout=5) as r:
+        w = json.loads(r.read().decode('utf-8'))
+    route = w['track']['route']
+    centre = np.asarray(route['waypoints'], dtype=float)[:, :2]
+    inner = np.asarray(route['inner'], dtype=float)[:, :2]
+    outer = np.asarray(route['outer'], dtype=float)[:, :2]
+    n = min(len(centre), len(inner), len(outer))
+    centre, inner, outer = centre[:n], inner[:n], outer[:n]
+    half = (np.linalg.norm(inner - centre, axis=1)
+            + np.linalg.norm(outer - centre, axis=1)) / 2.0
+    if len(centre) > 1 and np.allclose(centre[0], centre[-1]):
+        centre, half = centre[:-1], half[:-1]
+    print('world %s ("%s") from the running simulator'
+          % (w.get('world_id', '?')[:12], w.get('display', '?')))
+    return centre, half
+
+
 def load_route(path):
+    if path in ('api', 'sim', '-'):
+        return load_route_api()
     a = np.load(path, allow_pickle=True)
     if a.ndim != 2 or a.shape[1] < 6:
         sys.exit('unexpected route shape %s' % (a.shape,))
@@ -240,7 +270,9 @@ def report(name, pts, a_lats):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('route')
+    ap.add_argument('route', nargs='?', default='api',
+                    help="path to a route .npy, or 'api' (default) to "
+                         'read the world the simulator has loaded')
     ap.add_argument('--points', type=int, default=600,
                     help='resampled points around the lap')
     ap.add_argument('--margin', type=float, default=CAR_HALF_WIDTH,
