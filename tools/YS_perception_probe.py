@@ -282,7 +282,7 @@ def post_json(path, payload, timeout=5.0):
         return None
 
 
-def calibrate_against_cone(cone, distances, w_h=None):
+def calibrate_against_cone(cone, distances, verbose=False):
     """Park the car a measured distance behind a cone, facing it, and see
     which row the cone lands on. Repeating at several distances turns a
     single agreement into a curve, which is the difference between "the
@@ -323,6 +323,13 @@ def calibrate_against_cone(cone, distances, w_h=None):
               % (d, fwd, pred[1], seen[1], d_seen - d_pred))
         rows.append((fwd, pred[1], seen[1]))
 
+        if verbose:
+            print('      what is actually in column %d:' % pred[0])
+            for a, b, v in column_profile(frame, pred[0], h):
+                print('        rows %3d-%3d  H %3d S %3d V %3d%s'
+                      % (a, b, v[0], v[1], v[2],
+                         '   <- predicted' if a <= pred[1] <= b else ''))
+
     if len(rows) >= 2:
         errs = [abs(image_row_to_ground(s, 360, 480)
                     - image_row_to_ground(p, 360, 480)) for _f, p, s in rows]
@@ -332,8 +339,37 @@ def calibrate_against_cone(cone, distances, w_h=None):
               'under the track half-width (0.45 m)')
 
 
+def column_profile(frame, col, h):
+    """What is actually stacked up this image column, as HSV runs.
+
+    Blind colour matching already fooled one calibration pass -- the mask
+    meant for cones locked onto the orange centre dashes instead, and the
+    residual it produced looked like a real IPM error. Printing the column
+    makes that failure visible instead of plausible.
+    """
+    import cv2
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    col = int(max(0, min(frame.shape[1] - 1, col)))
+    runs = []
+    prev = None
+    for r in range(int(h * 0.35), h):
+        px = hsv[r, col]
+        key = (int(px[0]) // 15, int(px[1]) // 60, int(px[2]) // 60)
+        if key != prev:
+            runs.append([r, r, [int(v) for v in px]])
+            prev = key
+        else:
+            runs[-1][1] = r
+    return [(a, b, v) for a, b, v in runs if b - a >= 3]
+
+
 def find_cone_base(frame, pred, w, h, window=70):
-    """Bottom-centre of the strongly coloured blob nearest the prediction."""
+    """Bottom-centre of the strongly coloured blob nearest the prediction.
+
+    Excludes the orange band: the track's centre dashes sit right where a
+    cone search would look and are far larger than one, so leaving them in
+    makes the detector confidently wrong.
+    """
     import cv2
     if pred is None:
         return None
@@ -344,7 +380,9 @@ def find_cone_base(frame, pred, w, h, window=70):
     if win.size == 0:
         return None
     H, S, V = win[:, :, 0].astype(int), win[:, :, 1], win[:, :, 2]
-    mask = ((S > 90) & (V > 60) & ((H < 90) | (H > 125))).astype(np.uint8)
+    road = (H >= 90) & (H <= 125)              # measured: road sits near 106
+    dashes = (H >= 8) & (H <= 35)              # orange centre line
+    mask = ((S > 90) & (V > 60) & ~road & ~dashes).astype(np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cnts = [c for c in cnts if cv2.contourArea(c) > 20]
@@ -362,6 +400,8 @@ def main():
                     help='park behind this cone at several distances and '
                          'measure the IPM error (moves the car)')
     ap.add_argument('--distances', default='0.8,1.2,1.6,2.0,2.5,3.0')
+    ap.add_argument('--verbose', action='store_true',
+                    help='print what is actually in the predicted column')
     args = ap.parse_args()
 
     if args.calibrate:
@@ -370,7 +410,8 @@ def main():
         if not match:
             sys.exit('no object named %s' % args.calibrate)
         calibrate_against_cone(
-            match[0], [float(x) for x in args.distances.split(',')])
+            match[0], [float(x) for x in args.distances.split(',')],
+            verbose=args.verbose)
         return
 
     objs = get_json('/objects')
