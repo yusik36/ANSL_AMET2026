@@ -101,6 +101,39 @@ class Track:
         self.cum_s = cum_s                # arc length at each point
 
     @classmethod
+    def from_api(cls, base=DEFAULT_BASE):
+        """Track geometry from the running simulator.
+
+        Preferred over a route file: the file on disk may belong to a world
+        that is not loaded. Scoring a lap against the wrong track's
+        boundaries reports off-track excursions that never happened, and
+        misses the ones that did.
+        """
+        try:
+            import numpy as np
+        except ImportError:
+            sys.exit('numpy is required')
+        w = get_json(base.rstrip('/') + '/world', timeout=5.0)
+        if not w or 'track' not in w:
+            return None
+        route = w['track']['route']
+        if not all(k in route for k in ('waypoints', 'inner', 'outer')):
+            return None
+        centre = np.asarray(route['waypoints'], dtype=float)[:, :2]
+        inner = np.asarray(route['inner'], dtype=float)[:, :2]
+        outer = np.asarray(route['outer'], dtype=float)[:, :2]
+        n = min(len(centre), len(inner), len(outer))
+        centre, inner, outer = centre[:n], inner[:n], outer[:n]
+        half = (np.linalg.norm(inner - centre, axis=1)
+                + np.linalg.norm(outer - centre, axis=1)) / 2.0
+        seg = np.linalg.norm(np.diff(centre, axis=0), axis=1)
+        cum = np.concatenate([[0.0], np.cumsum(seg)])
+        print('track from the simulator: world %s ("%s")'
+              % (str(w.get('world_id', '?'))[:12], w.get('display', '?')))
+        return cls([tuple(p) for p in centre], list(half),
+                   float(cum[-1]), list(cum))
+
+    @classmethod
     def load(cls, path):
         try:
             import numpy as np
@@ -351,12 +384,18 @@ def main():
     world = st.get('current') if isinstance(st, dict) else None
     print('simulator up. world = %s' % world)
 
-    route = find_route(world, args.route)
-    if not route:
-        sys.exit('no route .npy found; pass --route explicitly')
-    track = Track.load(route)
-    print('route: %s  (%.2f m, %d points, width ~%.2f m)'
-          % (os.path.basename(route), track.length, len(track.centre),
+    # Ask the simulator what is loaded before trusting anything on disk:
+    # the bundled route file belongs to a sample world, and scoring against
+    # the wrong boundaries invents excursions and hides real ones.
+    track = None if args.route else Track.from_api(args.base)
+    if track is None:
+        route = find_route(world, args.route)
+        if not route:
+            sys.exit('no track from the API and no route .npy found')
+        track = Track.load(route)
+        print('route file: %s' % os.path.basename(route))
+    print('track: %.2f m, %d points, width ~%.2f m'
+          % (track.length, len(track.centre),
              2 * sum(track.half_width) / len(track.half_width)))
     print('watching... Ctrl-C to stop\n')
 
