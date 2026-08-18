@@ -22,15 +22,27 @@ owning the wheel:
                                                whatever physicar_vision's lane
                                                node suggested.
 
-FRONT_OFFSET_DEG and AVOID_STEER_SIGN below are CONFIRMED via live bench
-test on the practice chassis (2026-08-14): the practice lidar is mounted
-backwards (scan angle 0 points at the vehicle rear, hence offset=180) and
-positive /steering was found to turn the vehicle toward the scan-angle-negative
-side rather than the REP-103/105-assumed positive side, hence sign=-1.0.
-These are PRACTICE-CHASSIS-SPECIFIC -- the real Physicar almost certainly has
-different lidar mounting and must be re-verified on 2026-08-25, not assumed
-to carry over. Re-run the same manual bench test (point an obstacle at a known
-side, confirm which way the car steers) before trusting these on the real car.
+GEOMETRY DEFAULTS TARGET PHYSICAR, NOT THE PRACTICE CHASSIS (2026-08-18).
+The defaults below describe the contest vehicle, because that is what the
+code has to be right about on race day:
+  - front_offset_deg = 0: physicar.urdf.xacro mounts the lidar with
+    rpy="0 0 0", so scan angle 0 already points forward.
+  - avoid_steer_sign = +1: positive /steering turns left. In the simulator
+    cmd_vel_adapter_node.py publishes angular.z = v*tan(steering)/wheelbase,
+    which is REP-103 positive-is-counter-clockwise; on the real car the
+    driver's steering channel is left non-inverted.
+
+The practice RC car is the odd one out -- its lidar is mounted backwards and
+its servo wiring makes positive /steering turn right, both confirmed by
+bench test on 2026-08-14. Those values now live in autonomy_launch.py (the
+practice-platform launch) rather than here, so that running on the practice
+car needs an override and running on Physicar does not. They were previously
+the defaults, which meant the sim and the real vehicle both got a lidar
+pointed at their own back bumper.
+
+Verify rather than trust: tools/YS_steer_check.py drives a known steering
+command and reports which way the car actually turned. Run it once in the
+simulator, and again on 2026-08-25 when the real car arrives.
 """
 import math
 
@@ -45,9 +57,9 @@ AVOID_SPEED_MPS = 0.15
 STOP_DISTANCE_M = 0.35
 AVOID_DISTANCE_M = 0.7
 FRONT_HALF_ANGLE_DEG = 30.0
-FRONT_OFFSET_DEG = 180.0      # CONFIRMED 2026-08-14 bench test on practice chassis: lidar mounted backwards, scan angle 0 = vehicle REAR. Re-verify on real Physicar.
+FRONT_OFFSET_DEG = 0.0        # Physicar mounts the lidar facing forward: physicar.urdf.xacro gives lidar_joint rpy="0 0 0", so scan angle 0 is +x. See below for the practice chassis.
 AVOID_STEER_DEG = 15.0
-AVOID_STEER_SIGN = -1.0       # CONFIRMED 2026-08-14 bench test on practice chassis: +1.0 steered toward the obstacle (wrong), flipped. Re-verify on real Physicar.
+AVOID_STEER_SIGN = 1.0        # Positive /steering turns LEFT on Physicar (REP-103): cmd_vel_adapter_node.py computes angular.z = v*tan(steering)/L, and the real driver leaves its steering channel non-inverted. See below for the practice chassis.
 PUBLISH_RATE_HZ = 20.0
 SCAN_STALE_S = 0.5
 
