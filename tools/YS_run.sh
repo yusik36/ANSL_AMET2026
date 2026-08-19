@@ -33,6 +33,16 @@ overrides=("$@")          # name:=value pairs, forwarded to ros2 launch
 command -v ros2 >/dev/null || { echo "ros2 not on PATH -- source install/setup.bash first" >&2; exit 1; }
 curl -sf "$API/status" >/dev/null || { echo "simulator not reachable at $API" >&2; exit 1; }
 
+stale=$(ps -eo pid,args \
+        | grep -E 'planner_node|judgment_node|traffic_light_node' \
+        | grep -v grep | awk '{print $1}')
+if [ -n "$stale" ]; then
+  echo "!!! a previous stack is still running (pids: $stale)" >&2
+  echo "    killing it -- two stacks publishing /speed fight over the car" >&2
+  for p in $stale; do kill -9 "$p" 2>/dev/null; done
+  sleep 2
+fi
+
 mkdir -p "$RUNS"
 stamp="$(date +%Y%m%d-%H%M%S)"
 slug="$(printf '%s' "$label" | tr -c 'A-Za-z0-9._-' '-')"
@@ -41,11 +51,23 @@ out="$RUNS/${stamp}_${slug}.txt"
 
 stack_pid=""
 cleanup() {
-  if [ -n "$stack_pid" ] && kill -0 "$stack_pid" 2>/dev/null; then
-    kill "$stack_pid" 2>/dev/null
+  # Kill the process GROUP, not the launcher. `ros2 launch` spawns each node
+  # as a separate process and killing the launcher orphans them: they keep
+  # running, keep publishing, and the next run adds another set on top. Three
+  # stacks accumulated that way before it was noticed, and between runs a
+  # surviving judgment_node was still driving the car -- so a teleport back
+  # to the start line lasted about two seconds, and every measurement taken
+  # afterwards described a car that had already driven off somewhere.
+  if [ -n "$stack_pid" ]; then
+    kill -- -"$stack_pid" 2>/dev/null
     sleep 2
-    kill -9 "$stack_pid" 2>/dev/null
+    kill -9 -- -"$stack_pid" 2>/dev/null
   fi
+  # Belt and braces: anything of ours still alive, by name.
+  for p in $(ps -eo pid,args | grep -E 'planner_node|judgment_node|traffic_light_node' \
+             | grep -v grep | awk '{print $1}'); do
+    kill -9 "$p" 2>/dev/null
+  done
   # Leave the car stopped rather than coasting into scenery after teardown.
   ros2 topic pub --once /speed std_msgs/msg/Float64 '{data: 0.0}' >/dev/null 2>&1
 }
@@ -61,7 +83,7 @@ echo "--- stack up: $LAUNCH ${overrides[*]:-}"
 # ${overrides[@]+...} rather than ${overrides[@]:-}: the latter expands an
 # empty array to one empty-string argument, which ros2 launch rejects.
 # shellcheck disable=SC2086
-ros2 launch $LAUNCH ${overrides[@]+"${overrides[@]}"} \
+setsid ros2 launch $LAUNCH ${overrides[@]+"${overrides[@]}"} \
   > "$RUNS/${stamp}_${slug}.stack.log" 2>&1 &
 stack_pid=$!
 sleep "$SETTLE"
