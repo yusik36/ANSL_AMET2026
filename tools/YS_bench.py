@@ -252,6 +252,8 @@ class Run:
         self.laps = []             # completed lap times
         self._lap_t0 = None
         self._last_s = None
+        self._lap_dist = 0.0       # ground covered since the lap started
+        self._last_xy = None
         self._wrap_base = 0.0
 
     def add(self, t, x, y, yaw, speed):
@@ -278,12 +280,28 @@ class Run:
         else:
             self._off = None
 
-        # Lap detection: arc length wraps from near the end back to near zero.
+        # Lap detection: arc length wraps from near the end back to near zero,
+        # AND the car has actually driven most of a lap to get there.
+        #
+        # The wrap alone is not enough, because the projection is ambiguous
+        # exactly at the start line -- which is exactly where the car starts.
+        # A pose a millimetre before the line projects onto the closing
+        # segment and reports s = L, so the next sample looks like a wrap and
+        # a lap of one sample interval gets recorded. With --laps 1 that ends
+        # the run 50 ms after it began and writes a 0.05 s lap time into the
+        # log, which reads like a scoring glitch rather than the ruined
+        # measurement it is.
         L = self.track.length
+        if self._last_xy is not None:
+            self._lap_dist += math.hypot(x - self._last_xy[0],
+                                         y - self._last_xy[1])
+        self._last_xy = (x, y)
         if self._last_s is not None:
-            if self._last_s > L * 0.75 and s < L * 0.25:
+            if (self._last_s > L * 0.75 and s < L * 0.25
+                    and self._lap_dist > L * 0.5):
                 self.laps.append(t - self._lap_t0)
                 self._lap_t0 = t
+                self._lap_dist = 0.0
         self._last_s = s
 
     # -- derived ---------------------------------------------------------

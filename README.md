@@ -1,13 +1,33 @@
 # ANSL AMET2026
 
-2026 AMET 자율주행 해커톤 팀 개발 저장소. 대회 실차(Physicar)는 대여 전까지 접근 불가하므로,
-랩실 부품으로 구성한 연습용 플랫폼(Raspberry Pi 4 + RPLidar A1 + ELP USB 카메라 + HandsFree USB IMU)
-위에서 ROS2 자율주행 스택을 미리 개발/검증한다.
+2026 AMET 자율주행 해커톤 팀 개발 저장소 (충남대 무인이동체 항법연구실).
 
 대회 실차 스펙: Raspberry Pi 5, Ubuntu 24.04 LTS, ROS2 Jazzy, RPLidar C1, 9축 IMU, 100° 야간카메라.
-이 저장소의 소프트웨어 스택(Ubuntu 24.04 + ROS2 Jazzy)은 실차와 동일하게 맞췄으나,
-센서 하드웨어 자체는 완전히 동일하지 않다. 목표는 하드웨어를 정확히 복제하는 게 아니라
-**대회 전까지 인지-판단-제어 전체 프레임워크를 완성/검증**하는 것이다.
+이 저장소의 SW 스택은 실차와 동일하게 맞췄다. 실차 대여 전까지는 랩실 부품으로 구성한 연습용
+플랫폼(RPi4 + RPLidar A1 + ELP USB 카메라 + HandsFree USB IMU)과 대회 공식 웹 시뮬레이터
+위에서 개발/검증한다.
+
+> **주행 로직 전체 설명은 별도 문서에 있다.**
+> 이미지 한 장이 바퀴까지 가는 7단계와 각 단계의 설계 근거:
+> <https://claude.ai/code/artifact/46e8273c-71b2-4064-aa21-a3422120d365>
+
+---
+
+## 한눈에
+
+```
+/camera/image_raw ──► planner_node ──► plan/speed      ──► judgment_node ──► /speed
+                          │            plan/steering                         /steering
+                          │            plan/valid            ▲
+                          │                                  │
+                      corridor.py                  traffic_light_node
+                    (ROS 없는 순수 로직)            traffic/light_state
+                                                    traffic/valid
+```
+
+**카메라 이미지에서 "차가 지나갈 수 있는 통로"를 직접 찾고, 그 통로 한가운데를 향해 몬다.**
+차선을 따라가는 것도, 장애물을 피하는 것도 아니다 — 장애물은 그냥 통로가 좁아진 지점이라
+회피 모드로 들어가고 나오는 코드 자체가 없다.
 
 ## 워크스페이스 구조
 
@@ -15,168 +35,165 @@
 
 ```
 src/
-  sllidar_ros2/       # RPLidar 공식 드라이버 (Slamtec 원본, 벤더링됨)
-  physicar_imu/        # HandsFree USB IMU용 자체 작성 드라이버
-  physicar_driver/      # /speed + /steering 구독 -> Arduino ESC/서보 드라이버 (연습용 플랫폼)
-  physicar_nav/          # 라이다 기반 반응형 장애물 회피 (obstacle/* 토픽 발행)
-  physicar_vision/        # 카메라 기반 인지: 차선 추종 + 신호등 감지 + HSV 캘리브레이션 헬퍼
-  physicar_judgment/       # 위 셋을 종합해 최종 /speed + /steering을 내는 판단(중재) 노드
-  physicar_bringup/         # 센서 전체 + 전체 자율주행 스택을 한 번에 띄우는 launch 패키지
+  physicar_planner/    ★ 주행. 카메라 → 통로 → 속도/조향 (corridor.py + planner_node.py)
+  physicar_judgment/   ★ 최종 중재. 신호등 게이트 + 페일세이프 → /speed, /steering
+  physicar_vision/     ★ traffic_light_node (신호등) + hsv_calibrate_node
+                         lane_follow_node 는 대체됨 — 아래 "대체된 코드" 참고
+  physicar_bringup/    ★ launch 모음 (real_autonomy_launch.py 가 대회용)
+  physicar_nav/          avoid_node — 대체됨, 연습 섀시 launch에서만 사용
+  physicar_driver/       연습용 플랫폼 전용 Arduino ESC/서보 드라이버 (실차는 공식 노드 사용)
+  physicar_imu/          연습용 플랫폼 전용 HandsFree USB IMU 드라이버 (실차는 공식 노드 사용)
+  sllidar_ros2/          RPLidar 공식 드라이버 (Slamtec 원본, 벤더링됨)
+tools/                   YS_* 계측/검증 도구 — 아래 "도구" 참고
 ```
 
-카메라는 별도 패키지 없이 apt로 설치되는 `ros-jazzy-usb-cam`을 그대로 사용한다.
+★ = 대회 실차에서 실제로 뜨는 것. 나머지는 연습 플랫폼 전용이거나 대체된 코드다.
 
-## 개발 환경 세팅 (새로 합류하는 팀원)
+카메라는 별도 패키지 없이 apt로 설치되는 `ros-jazzy-usb-cam`을 그대로 사용한다(연습 플랫폼).
 
-1. Ubuntu 24.04 LTS + ROS2 Jazzy 설치 (Raspberry Pi 4/5 또는 x86 노트북 어디든 무방, WSL2도 가능)
-2. `sudo apt install ros-jazzy-usb-cam ros-dev-tools python3-serial v4l-utils ros-jazzy-cv-bridge python3-opencv`
-3. 이 저장소 클론 후 빌드:
-   ```bash
-   git clone https://github.com/yusik36/ANSL_AMET2026.git physicar_ws
-   cd physicar_ws
-   rosdep install --from-paths src --ignore-src -r -y
-   colcon build --symlink-install
-   source install/setup.bash
-   ```
-4. `echo 'export ROS_DOMAIN_ID=42' >> ~/.bashrc` — 랩실 네트워크의 다른 프로젝트와 토픽이 섞이지 않도록 반드시 설정 (팀원 전원 동일하게 42로 맞출 것)
+---
 
-## 센서 전체 실행
+## 실행
 
-실제 센서가 연결된 보드(현재는 팀 공용 RPi4, hostname `2026AMET`)에서:
+### 대회 실차 / 시뮬레이터
 
 ```bash
-ros2 launch physicar_bringup sensors_launch.py
+source install/setup.bash
+ros2 launch physicar_bringup real_autonomy_launch.py
 ```
 
-**알려진 하드웨어 한계**: 라이다+카메라+IMU를 동시에 실행하면 USB 허브 전력 부족으로 장치가
-끊길 수 있다(라이다 모터 기동 순간 전류 스파이크가 다른 USB 장치를 리셋시킴, dmesg로 확인됨).
-자체 전원(self-powered) USB 허브 도입 전까지는 필요한 센서만 개별로 켜서 개발할 것.
+센서 드라이버는 **띄우지 않는다.** 실차는 카메라·라이다·IMU 드라이버와 공식
+`physicar_driver_node`를 시스템 서비스로 이미 돌리고 있어서, 여기서 다시 띄우면 충돌하거나
+중복된다. 이 launch가 올리는 건 `planner_node` + `judgment_node` + `traffic_light_node` 셋뿐이다.
 
-## 토픽 인터페이스 (이 위에서 인지/판단/제어 코드를 개발하면 됨)
-
-| 토픽 | 메시지 타입 | 발행 주기 | 설명 |
-|---|---|---|---|
-| `/scan` | `sensor_msgs/msg/LaserScan` | ~10Hz | RPLidar A1, 360도, 최대 12m (실차는 C1, 토픽명 동일) |
-| `/image_raw` | `sensor_msgs/msg/Image` | ~30Hz | ELP USB 카메라, 1280x720 — **⚠️ 실차는 `/camera/image_raw`** (2026-08-16 공식 소스로 확인, 네임스페이스 다름). `physicar_vision`은 `image_topic` launch 인자로 이 차이를 흡수함 (`vision_launch.py` 참고) |
-| `/imu/data` | `sensor_msgs/msg/Imu` | ~162Hz | orientation(쿼터니언)+각속도+선형가속도 |
-| `/imu/mag` | `sensor_msgs/msg/MagneticField` | ~162Hz | 지자기 (실내에서는 신뢰도 낮음, 참고용) |
-
-**⚠️ 실차 IMU 인터페이스 주의사항 (대회 기술 담당자 확인 2026-08-13, 공식 소스코드로 재확인 2026-08-16)**
-실차 센서 칩은 9축이지만, 실차의 `/imu` 토픽은 **6축(자이로+가속도)만 제공하고 50Hz**로 나온다.
-지자기 3축은 별도 `/imu/mag` 토픽으로 온다. `physicar_driver_node.cpp`에서 직접 확인됨:
-`msg.orientation_covariance[0] = -1.0`으로 명시적으로 세팅함 — 이건 ROS 표준 관례로 "orientation
-추정값 없음/신뢰 불가"를 뜻한다. 이 연습용 IMU 드라이버는 편의상 `/imu/data.orientation`에 쿼터니언
-(자체 센서 퓨전 결과)을 채워서 보내지만, **실차에는 이 필드가 없다(공식 확인됨, 추측 아님).**
-→ **`orientation` 필드에 의존하는 로직을 짜지 말 것.** 각속도(`angular_velocity`)와 선형가속도
-(`linear_acceleration`)만 신뢰하고, 자세 추정이 필요하면 직접 상보/칼만 필터를 만들어 쓸 것.
-주기 차이(162Hz vs 실차 50Hz)는 문제 없음(더 빠른 건 상관없음).
-
-## 출력 인터페이스 (실차 확정 스펙, 대회 기술 담당자 확인, 2026-08-13)
-
-**팀 코드(인지/판단)가 최종적으로 내보내야 하는 토픽은 이 두 개다.** `/cmd_vel`(Twist)이 아니라
-애커만 조향 방식이라 속도/조향각을 따로 낸다.
-
-| 토픽 | 메시지 타입 | 단위 | 설명 |
-|---|---|---|---|
-| `/speed` | `std_msgs/msg/Float64` | m/s | 목표 속도 |
-| `/steering` | `std_msgs/msg/Float64` | rad | 목표 조향각 (Ackermann) |
-
-이 두 토픽을 실차의 `physicar_driver_node`가 구독해서 UART로 확장보드(ESC+서보)에 내려보낸다.
-
-**클램프/안전장치는 드라이버 노드(SDK 계층)에 이미 하드코딩되어 있어서 우리 코드가 직접 구현할 필요 없음
-(2026-08-16, 공식 `physicar_driver_node.cpp`/`driver_params.yaml` 소스코드로 재확인 — 담당자에게
-전해들은 값과 전부 일치):**
-- 최대 속도 **3.0 m/s**, 최대 조향각 **±20°** — 초과값은 자동 클램프
-- ESC 데드존(공식 파라미터 `min_speed`) **0.3 m/s** — 이보다 작은 speed 명령은 사실상 무반응
-- 서보 각도 0–180° 클램프 + 채널별 리밋, ESC 듀티 범위 클램프, 배터리 전압 보상
-- **명령 유효시간(`cmd_timeout`) 1초** — 그 안에 갱신 안 되면 speed는 자동 0으로(steering은 마지막 값 유지, 재중앙정렬 안 됨). 판단 노드는 최소 1Hz보다는 빠르게 계속 퍼블리시해야 함
-- 휠베이스 **0.18m**, 트랙폭 0.16m, 휠 반지름 0.0375m — 공식 값
-- 시뮬레이터도 동일 상수(3.0 m/s, ±20°)로 동작
-
-**`/cmd_vel`(Twist) — 2026-08-16 공식 소스코드로 확인**: 실차의 `physicar_driver_node`도
-`/cmd_vel`을 직접 구독하며, 시뮬레이터와 동일하게 `steering = atan(ω·L/v)` (휠베이스 L=0.18m,
-공식 값 확인됨)로 변환해 같은 클램프를 거쳐 처리한다. 즉 `/cmd_vel`을 써도 실차에서 문제없이
-동작한다 — 다만 이 저장소는 처음부터 `/speed`+`/steering` 직접 퍼블리시로 설계했고 그게 더
-명시적이라 그대로 유지한다.
-
-**우리 연습용 플랫폼(RC카+Arduino+ESC)에도 이 인터페이스(`/speed`, `/steering` 구독,
-동일 클램프 적용)를 그대로 구현한 드라이버 노드가 있다** — `physicar_driver/driver_node.py`,
-Arduino 펌웨어(`physicar_driver_fw.ino`)와 시리얼로 통신. 실차의 `physicar_driver_node`와
-토픽 계약은 동일하므로, 인지/판단 쪽 노드(아래 참조)는 어느 플랫폼에서 실행하든 코드 변경 없이
-그대로 동작한다.
-
-## 인지-판단 파이프라인
-
-전체 자율주행 스택은 한 번에 이렇게 띄운다:
+파라미터 오버라이드는 **launch 시점에** 넘겨야 한다. 노드는 생성 시 파라미터를 한 번 읽고
+캐시하므로 실행 중인 노드에 `ros2 param set`을 해도 조용히 무시된다.
 
 ```bash
-ros2 launch physicar_bringup autonomy_launch.py
+ros2 launch physicar_bringup real_autonomy_launch.py \
+    road_h_min:=95 road_h_max:=125 aggression:=3.0 debug:=true
 ```
 
-내부적으로 센서 → `physicar_driver` → `physicar_nav`(장애물 회피) → `physicar_vision`(차선 추종
-+ 신호등) → `physicar_judgment`(최종 중재, `/speed`+`/steering` 발행) 순서로 뜬다. 카메라 없이
-라이다만으로 벤치 테스트하려면 `ros2 launch physicar_nav avoid_test_launch.py`(차선/신호등 게이트
-비활성화 상태로 `physicar_judgment`까지 포함해서 뜸).
-
-### 왜 avoid_node가 더 이상 /speed, /steering을 직접 발행하지 않는가
-
-초기 버전(`physicar_nav`만 있던 시점)의 `avoid_node`는 `/speed`+`/steering`을 직접 발행해서 사실상
-유일한 컨트롤러였다. 차선 추종/신호등 인식을 추가하면서 이 방식은 깨진다 — 세 인지 결과를 하나의
-최종 명령으로 합칠 중재자가 필요하기 때문에, `avoid_node`는 이제 `obstacle/speed_cap`,
-`obstacle/steer_override`, `obstacle/override_active` 세 토픽만 내고, 최종 `/speed`+`/steering`은
-`physicar_judgment/judgment_node`가 낸다. 우선순위는 **장애물 회피/정지 안전 > 신호등 게이트 > 차선
-추종** 순 — 자세한 근거는 `judgment_node.py` 모듈 docstring 참고.
-
-### 차선 추종 — 트랙 색상을 모르는 채로 어떻게 개발했나
-
-8/18에 공개되는 코스 규격은 예선용이고, 본선 트랙은 당일 랜덤 공개다(위 "대회 규정" 참고). 즉 지금
-시점에 트랙 경계 마킹의 실제 색상을 알 수 없고, 8/18 이후에도 본선 트랙은 또 다를 수 있다. 그래서
-`physicar_vision/lane_follow_node.py`는 색상을 코드에 박아넣지 않고 HSV 임계값을 전부 ROS2
-파라미터로 뒀다(기본값은 "어두운 바닥 위 밝은 선"을 가정한 placeholder일 뿐, 실제 마킹 색과 다를 수
-있음). 현장에서 카메라로 트랙 표면을 비추고 `hsv_calibrate_node`를 돌리면 터미널에 추천 HSV 범위가
-찍히므로, 그 값으로 파라미터만 바꿔 끼우면 된다(코드/로직 변경 불필요):
+### 연습용 플랫폼 (RPi4 + Arduino 섀시)
 
 ```bash
-ros2 run physicar_vision hsv_calibrate_node
-# 출력된 h_min/h_max/s_max/v_min 값을 lane_follow_node 파라미터로 전달
-ros2 run physicar_vision lane_follow_node --ros-args -p h_min:=<값> -p s_max:=<값> -p v_min:=<값>
+ros2 launch physicar_bringup sensors_launch.py     # 센서만
+ros2 launch physicar_bringup autonomy_launch.py    # 센서 + 드라이버 + 구 파이프라인
 ```
 
-핵심 알고리즘(ROI 내 최대 컨투어의 중심 오프셋 → 조향각)은 임계값이 다소 부정확해도 어느 정도
-견디도록 설계했지만, 임계값 자체는 반드시 실제 트랙 표면에서 재보정해야 한다.
+`autonomy_launch.py`는 연습 섀시 전용이다 — 라이다가 뒤로 달려 있고 서보가 반대로 배선돼
+있어서 `front_offset_deg:=180.0`, `avoid_steer_sign:=-1.0`을 오버라이드해서 띄운다.
+**실차에 이 launch를 쓰면 안 된다.**
 
-### 신호등 게이트 — "감지 안 됨"을 언제 정지로 볼 것인가
+**알려진 하드웨어 한계 (연습 플랫폼)**: 라이다+카메라+IMU를 동시에 실행하면 USB 허브 전력
+부족으로 장치가 끊길 수 있다(라이다 모터 기동 전류 스파이크가 다른 USB 장치를 리셋, dmesg 확인).
+self-powered USB 허브 도입 전까지는 필요한 센서만 개별로 켤 것.
 
-이건 담당자에게 확인한 게 아니라 이 파이프라인을 만들며 내린 설계 판단이다: 대회 규정상 페널티는
-"빨간불 출발"에만 붙고, 트랙 대부분 구간에는 애초에 신호등이 안 보인다. 그래서
-`traffic_light_node`는 **"카메라가 죽었다"(`traffic/valid=False`)**와 **"카메라는 살아있는데 이번
-프레임엔 신호등이 안 보인다"(`traffic/light_state="NONE"`)**를 구분해서 발행하고,
-`judgment_node`는 전자만 정지로 취급한다 — 후자(NONE)는 "가도 됨"으로 처리한다(그렇지 않으면
-신호등이 안 보이는 직선 구간에서도 계속 멈춰 있게 됨). 실제로 빨간불이 잡혔을 때만
-(`light_state="RED"` and `traffic/valid=True`) 속도를 0으로 만든다.
+---
 
-### 캘리브레이션 체크리스트 (8/25 실차 인수 시)
+## 도구 (`tools/`, 전부 `YS_` 접두사)
 
-| 항목 | 위치 | 비고 |
+팀 공유 환경에서 우리 파일을 구분하기 위한 접두사 규칙이다. **다른 팀원 파일은 건드리지 않는다.**
+
+| 도구 | 답하는 질문 | ROS 필요 |
 |---|---|---|
-| 카메라 토픽 네임스페이스 | `real_autonomy_launch.py`의 `image_topic` 인자 | ✅ 해결됨(2026-08-16) — `/camera/image_raw`로 이미 remap되어 있음, 추가 조치 불필요 |
-| 라이다 장착각 보정 | `physicar_nav` 파라미터 `front_offset_deg` | 연습 섀시 전용 실측값(180°)이 들어있음 — 실차는 다를 수 있으므로 재측정 필수. avoid_node.py 모듈 docstring 참고 |
-| 회피 조향 부호 | `physicar_nav` 파라미터 `avoid_steer_sign` | 연습 섀시 전용 실측값(-1.0) — 실차에서 반대로 돌면 다시 플립 |
-| 차선 HSV 임계값 | `physicar_vision` 파라미터 `h_min/h_max/s_max/v_min` | `hsv_calibrate_node`로 실측, 8/18 코스 공개 후 1차 보정, 8/25 실차 인수 후 재보정 |
-| 차선 조향 부호 | `physicar_vision` 파라미터 `lane_steer_sign` | 반대로 돌면 -1.0으로 플립 |
-| 신호등 HSV 임계값 | `physicar_vision` 파라미터 `sat_min/val_min` | 실제 조명/노출 환경에서 재확인 |
-| 카메라 화각/왜곡 | (미보정) | 실차 카메라 공식 스펙(2026-08-16 확인): OV5647, IR-cut 없음, 640x480 캡처→480x360 출력, ~15fps, FOV 약 98°(undistort.dist_scale=0.7 기준). 연습 카메라(ELP)와 여전히 다르므로 ROI 비율(`roi_top_frac` 등) 재조정 필요할 수 있음 |
-| IMU orientation 필드 | (해당 없음, 의도적으로 미사용) | 실차 `/imu`는 6축뿐, `orientation_covariance[0]=-1`로 공식 확인됨 — 이 파이프라인은 애초에 orientation을 안 씀 |
+| `YS_calibrate.py` | 도로가 주변과 **어느 채널**에서 갈리나, 경계값은 얼마인가 | ○ |
+| `YS_trace.py` | 명령한 속도와 실제 속도가 같은가 — 판단이 틀렸나 명령이 안 갔나 | ○ |
+| `YS_run.sh` | 한 바퀴 벤치마크 — 리셋·구동·채점·정리를 한 명령으로 | ○ |
+| `YS_bench.py` | 랩타임/코스이탈 자동 채점 (시뮬레이터 HTTP API, 읽기 전용) | ✕ |
+| `YS_perception_probe.py` | IPM 거리 추정이 실제와 맞는가 | ○ |
+| `YS_steer_check.py` | 조향 부호와 라이다 장착각이 실제로 어느 쪽인가 | ○ |
+| `YS_raceline.py` | 최소곡률 레이싱라인 (평가용 — 주행에는 직접 못 씀, 아래 참고) | ✕ |
+| `YS_corridor_test.py` | 플래너 로직 30개 검증 — **시뮬레이터 없이** | ✕ |
+| `YS_bench_selftest.py` | 채점기 자체 검증 | ✕ |
+| `YS_trafficlight_test.py` | 신호등 판정 검증 | ✕ |
 
-### 실차 배포 — myapp.sh (2026-08-16 공식 소스코드로 확인)
+대회장에서 가장 먼저 돌릴 것:
 
-**팀 코드는 `/opt/physicar/userdata/myapp.sh`에 넣는다.** 실차 웹 UI(`:5000`, "MyApp" 패널)에서
-bash 스크립트를 업로드하면 `physicar-myapp.service`(systemd, 실패 시 자동 재시작)가 그 스크립트를
-실행한다. 핵심 SW(`physicar_driver_node`, 카메라/라이다 드라이버 등)는 절대 안 건드리고 이 슬롯에만
-배포하면 되므로 "SW 임의 변경 금지" 규정과 무관하다 — 대회 설계 자체가 이 슬롯을 통한 팀 로직
-경쟁을 의도하고 있다.
+```bash
+python3 tools/YS_calibrate.py --explain      # 차를 트랙 위에 세워두고
+```
 
-myapp.sh에 넣을 내용 (예상, 실차 인수 후 확정):
+차가 **서 있는 바닥**(색이 아니라 기하로 정의된 도로)에서 경계값을 뽑아 launch 인자를
+그대로 출력한다. H·S·V 세 채널을 다 채점해서 어느 채널이 실제로 가르는지도 이름을 대준다.
+
+---
+
+## 인터페이스 (실차 확정 스펙)
+
+### 입력
+
+| 토픽 | 타입 | 주기 | 비고 |
+|---|---|---|---|
+| `/camera/image_raw` | `sensor_msgs/Image` | ~15Hz | **실차/시뮬레이터**. 연습 플랫폼은 `/image_raw` — `image_topic` launch 인자로 흡수 |
+| `/scan` | `sensor_msgs/LaserScan` | ~10Hz | 실차 C1 / 연습 A1, 토픽명 동일 |
+| `/imu/data` | `sensor_msgs/Imu` | 50Hz(실차) | **orientation 없음** — 아래 주의 |
+| `/imu/mag` | `sensor_msgs/MagneticField` | | 실내 신뢰도 낮음 |
+
+**⚠️ IMU orientation 필드를 쓰지 말 것** (2026-08-13 담당자 확인, 08-16 공식 소스 재확인).
+실차 센서는 9축이지만 `/imu` 토픽은 6축(자이로+가속도)만 준다. `physicar_driver_node.cpp`가
+`msg.orientation_covariance[0] = -1.0`으로 명시 — ROS 표준 관례로 "orientation 없음/신뢰 불가".
+연습용 IMU 드라이버는 편의상 쿼터니언을 채워 보내지만 **실차에는 그 필드가 없다.**
+현재 파이프라인은 애초에 orientation을 안 쓴다.
+
+### 출력 — 팀 코드가 내야 하는 건 이 둘
+
+| 토픽 | 타입 | 단위 |
+|---|---|---|
+| `/speed` | `std_msgs/Float64` | m/s |
+| `/steering` | `std_msgs/Float64` | rad (Ackermann, **양수 = 좌회전**) |
+
+`/cmd_vel`(Twist)이 아니라 애커만이라 속도/조향각을 따로 낸다. 실차 드라이버도 `/cmd_vel`을
+구독하긴 하지만(`steering = atan(ω·L/v)`로 변환), 이 저장소는 `/speed`+`/steering` 직접
+퍼블리시로 설계했고 그게 더 명시적이라 유지한다.
+
+**클램프/안전장치는 드라이버 노드에 이미 하드코딩돼 있어 우리가 구현할 필요 없음**
+(2026-08-16 공식 `physicar_driver_node.cpp` / `driver_params.yaml` 소스 확인):
+
+- 최대 속도 **3.0 m/s**, 최대 조향각 **±20°** (기계적 한계 24°, 드라이버에서 20°로 제한)
+- ESC 데드존 `min_speed` **0.3 m/s** — 이보다 작은 명령은 사실상 무반응
+- 명령 유효시간 `cmd_timeout` **1초** — 갱신 안 되면 speed 자동 0 (steering은 마지막 값 유지)
+  → 판단 노드는 1Hz보다 빠르게 계속 퍼블리시해야 한다 (현재 20Hz)
+- 휠베이스 **0.18 m**, 트랙폭 0.16 m, 휠 반지름 0.0375 m
+- 서보 각속도 통상 스펙 600°/s — 시정수보다 각속도 제한으로 모델링 권장
+- 시뮬레이터도 동일 상수
+
+---
+
+## 대회장 캘리브레이션 체크리스트
+
+시뮬레이터에서 측정한 색상값 중 대회장까지 살아남는 건 거의 없다. 바닥은 잔디가 아니라
+전시장 바닥이고, 보라색 경계벽은 존재하지 않고, 조명은 그 홀의 조명이다.
+**살아남는 건 규칙의 모양이지 숫자가 아니다.**
+
+| 항목 | 파라미터 | 비고 |
+|---|---|---|
+| 도로 색상 | `road_h_min` / `road_h_max` | **반드시 재측정.** `YS_calibrate.py` |
+| 차선 페인트 | `paint_s_max` / `paint_v_min` | **반드시.** 조명 바뀌면 V 임계가 흔들림 |
+| 중앙 마킹 | `mark_h_min/max`, `mark_s_min` | **반드시.** 없거나 다른 색일 수 있음 |
+| 최대 통로폭 | `max_span` | 트랙 폭에 비례 (현재 1.2 m ← 실측 폭 0.70~0.87 m) |
+| 그립 | `aggression` | 현재 4.0 m/s². 낮게 시작해서 올린다 |
+| 가감속 | `max_accel` / `max_decel` | 현재 2.0 / 5.0 m/s². 실차가 못 내면 낮춘다 |
+| 신뢰 거리 | `max_range` | 현재 2.5 m. 카메라 마운트 같으면 유지 |
+| Lookahead | `lookahead_base` | 현재 0.70 m. 차 기하에서 나옴 — 유지 |
+| 조향 부호 | — | `YS_steer_check.py`로 실측. 실차는 양수=좌회전 (확인됨) |
+| 카메라 화각 | — | 실차 OV5647, IR-cut 없음, 640×480 캡처 → 480×360 출력, ~15fps, FOV ~98° |
+
+**가장 큰 미지수는 숫자가 아니다.** 시뮬레이터에서는 색상(H)이 도로와 주변을 갈랐다 —
+잔디는 초록이고 도로는 아니니까. 전시장에서 회색 트랙이 회색 바닥 위에 있으면 H로는 아무것도
+안 갈린다. 그건 임계값 문제가 아니라 **규칙 자체를 바꿔야 하는 문제**이고,
+`YS_calibrate.py`가 그 경우를 명시적으로 경고한다.
+
+---
+
+## 실차 배포
+
+**팀 코드는 `/opt/physicar/userdata/myapp.sh`에 넣는다** (2026-08-16 공식 소스 확인).
+실차 웹 UI(`:5000`, "MyApp" 패널)에서 bash 스크립트를 업로드하면
+`physicar-myapp.service`(systemd, 실패 시 자동 재시작)가 실행한다. 핵심 SW는 안 건드리고
+이 슬롯에만 배포하므로 "SW 임의 변경 금지" 규정과 무관하다 — 대회 설계 자체가 이 슬롯을
+통한 팀 로직 경쟁을 의도한다.
+
 ```bash
 #!/bin/bash
 source /opt/physicar/install/setup.bash   # 실차 워크스페이스 경로는 인수 시 확인
@@ -184,22 +201,92 @@ source ~/physicar_ws/install/setup.bash   # 우리 팀 패키지
 ros2 launch physicar_bringup real_autonomy_launch.py
 ```
 
-**주의**: 실차는 센서(카메라/라이다/IMU)와 `physicar_driver_node`가 이미 시스템 서비스로 떠있는
-상태다. `autonomy_launch.py`(연습용, sensors_launch.py+우리 driver_node까지 같이 띄움)를 그대로
-쓰면 안 되고, **`real_autonomy_launch.py`**(인지/판단 노드만 띄움, 카메라 토픽 remap 포함)를 써야
-한다.
+시뮬레이터의 Evaluation 하네스는 별도로 `source ~/physicar_ws/run.sh`를 진입점으로 쓴다.
+**아직 우리 launch가 여기 연결돼 있지 않다** (아래 미해결 참고).
 
-## 하드웨어 접근이 없는 팀원용 개발 방법
+---
 
-실물 센서 없이도 개발 가능:
-- 위 토픽 인터페이스(메시지 타입)만 맞춰서 노드를 작성하고, `ros2 bag record`로 녹화된 실제 센서 데이터로 재생하며 테스트
-- 또는 직접 더미 퍼블리셔로 가짜 `/scan`, `/image_raw` 데이터를 흘려보내며 로직만 먼저 검증
+## 대체된 코드
 
-## 대회 규정 관련 주의사항
+지우지 않고 남겨뒀다. 되살리려면 `real_autonomy_launch.py`를 고쳐야 하고, 그냥 실행만
+해서는 대회 경로에 들어가지 않는다.
 
-- 실전 예선/본선은 반드시 대여받는 공식 Physicar 차량으로만 진행 (자체 제작 차량으로 참가 불가, 규정 위반 시 실격)
-- **저장소 공개 상태 (2026-08-15)**: 이 저장소는 원래 "대회 규정상 다른 팀과 코드/기록 공유 시 실격
-  사유"라는 이유로 비공개(private)로 유지하기로 했었으나, 2026-08-15에 팀 판단으로 public으로
-  전환했다. 이 전환이 위 실격 사유와 충돌할 수 있다는 점은 전환 전에 명시적으로 인지한 상태였다 —
-  필요하면 대회 측(AI CASTLE 이동재 기술팀장)에 공개 저장소 운영이 규정상 문제없는지 재확인할 것.
-- Stateless 주행 요건: 자율주행 로직은 트랙 어느 지점에서 시작해도 동작해야 함
+| 파일 | 대체된 이유 |
+|---|---|
+| `physicar_vision/lane_follow_node.py` | 차선을 따라가는 대신 통로를 직접 찾는다 |
+| `physicar_nav/avoid_node.py` | 장애물이 통로의 좁아짐이라 별도 회피 계층이 필요없다 |
+
+**왜 분리 구조를 버렸나.** 차선 노드가 평소 운전하고 회피 노드가 끼어드는 구조에서는
+제어권이 코너 한복판에서 넘어간다. 회피 노드가 차를 어디에 놔두고 나갈지 모르는데 차선
+노드는 거기서부터 다시 차선을 찾아야 한다. 넘겨주는 순간과 돌려받는 순간이 각각 버그
+자리이고, 둘 다 가장 위험한 타이밍이다.
+
+`lane_follow_node`는 통로 규칙이 대회장에서 도로와 바닥을 못 가를 경우의 유일한 대안이라
+남겨뒀다.
+
+---
+
+## 전역 위치추정을 포기한 근거
+
+휠 엔코더가 없고, 위치는 레이저 스캔 매칭으로만 나온다. 대회장 펜스는 20 cm인데 라이다
+평면은 17 cm이고, **연습장에는 펜스가 아예 없다** (대회 측 답변). 그래서 최적 레이싱라인을
+계산해둬도 차가 트랙 위 자기 위치를 모른다.
+
+→ `YS_raceline.py`의 결과는 **주행에 직접 못 쓰고 시뮬레이터 평가에만 쓴다.**
+지금 보이는 것만으로 운전하는 통로 기반 설계가 여기서 나왔다.
+
+참고로 대회 트랙(`71e69ee9…`)은 30.50 m, 폭 0.70~0.87 m, 최적라인 최소반경 0.581 m
+(조향 17.2°). **중심선은 최소반경 0.223 m로 차가 못 돈다** — 코너 커팅은 최적화가 아니라
+완주의 전제조건이다.
+
+---
+
+## 개발 환경 세팅
+
+1. Ubuntu 24.04 LTS + ROS2 Jazzy (RPi 4/5 또는 x86 노트북, WSL2 가능)
+2. ```bash
+   sudo apt install ros-jazzy-usb-cam ros-dev-tools python3-serial v4l-utils \
+                    ros-jazzy-cv-bridge python3-opencv
+   ```
+3. ```bash
+   git clone https://github.com/yusik36/ANSL_AMET2026.git physicar_ws
+   cd physicar_ws
+   rosdep install --from-paths src --ignore-src -r -y
+   colcon build --symlink-install
+   source install/setup.bash
+   ```
+4. `echo 'export ROS_DOMAIN_ID=42' >> ~/.bashrc` — 랩실 네트워크의 다른 프로젝트와 토픽이
+   섞이지 않도록 팀원 전원 42로 통일
+
+### 하드웨어 없이 개발하기
+
+플래너 로직은 ROS 없이 검증된다. `corridor.py`에 rclpy가 하나도 안 들어가 있는 이유가 이것:
+
+```bash
+python3 tools/YS_corridor_test.py      # 30개 체크, 시뮬레이터/차량 불필요
+```
+
+---
+
+## 대회 규정 주의사항
+
+- 실전 예선/본선은 반드시 대여받는 공식 Physicar 차량으로만 진행 (자체 제작 차량 참가 불가, 실격)
+- **Stateless 요건**: 트랙 어느 지점에서 시작해도 동작해야 함. `judgment_node`는 차의 트랙 상
+  위치에 대해 상태를 갖지 않는다 — 기억하는 건 마지막 조향값과 타임스탬프뿐이고 둘 다 자동
+  만료된다
+- **저장소 공개 상태 (2026-08-15)**: 원래 "다른 팀과 코드/기록 공유 시 실격 사유"를 이유로
+  비공개였으나 팀 판단으로 public 전환. 이 전환이 규정과 충돌할 수 있다는 점은 인지한 상태 —
+  필요하면 대회 측(AI CASTLE 이동재 기술팀장)에 재확인할 것
+- 트랙은 8/18 공개분으로 고정, 본선에서는 **장애물 위치만** 바뀐다
+
+---
+
+## 미해결
+
+1. **시뮬레이터 한 바퀴 완주** — 아직 없다. 발진 버그(가속 제한 없음 + 정지 시 lookahead 과소)를
+   2026-08-19에 고쳤고 다음 주행이 판가름한다
+2. **`run.sh` 연결** — 시뮬레이터 Evaluation 진입점에서 우리 launch가 아직 안 불린다
+3. **라이다 비상정지** — 플래닝 루프 *바깥*에 둘 것. 카메라가 틀렸을 때의 마지막 방어선이라
+   카메라를 믿는 코드와 같은 경로에 있으면 안 된다
+4. **신호등 화각** — 출발 자세에서 신호등이 이미지 열 410~478(프레임 폭 480)에 걸쳐 거의
+   화면 밖이다. 카메라 팬(±30°)이 후보인데 미검증

@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Reactive obstacle-avoidance node: watches /scan and decides how much the
+"""SUPERSEDED -- not started by any deployment launch. Kept as a fallback.
+
+An obstacle is now a place where the drivable corridor is narrower, which
+physicar_planner handles without a separate avoidance layer, so there is no
+override to arbitrate and no control handed back mid-corner. Only
+autonomy_launch.py (the practice chassis) still starts this node.
+
+Note the parameters here carry PHYSICAR values -- front_offset_deg 0.0 and
+avoid_steer_sign 1.0. The practice chassis has its lidar mounted backwards
+and its servo wired inverted, so autonomy_launch.py overrides both to 180.0
+and -1.0. Do not copy one platform's numbers to the other.
+
+Reactive obstacle-avoidance node: watches /scan and decides how much the
 front cone is worth overriding steering for.
 
 Does NOT publish /speed or /steering directly anymore (it used to, in the

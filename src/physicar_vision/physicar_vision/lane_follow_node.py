@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
-"""Camera-based lane/track-boundary following.
+"""SUPERSEDED -- not started by any deployment launch. Kept as a fallback.
+
+physicar_planner reads the drivable corridor straight from the camera and
+publishes plan/*, which is what real_autonomy_launch.py runs. This node and
+physicar_nav/avoid_node were the pair it replaced: one followed a line, the
+other took the wheel when something appeared in front of it, and control
+changed hands mid-corner. Nothing here is wired into the race path.
+
+It stays in the tree because it is the only thing that still works if the
+corridor rule cannot be made to separate road from floor at the venue --
+see the channel-separation check in tools/YS_calibrate.py. Reviving it means
+editing real_autonomy_launch.py, not just running it.
+
+Camera-based lane/track-boundary following.
 
 Subscribes /image_raw, thresholds a bottom ROI in HSV to segment the track
 surface markings, and estimates a steering correction from how far the
