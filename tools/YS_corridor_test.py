@@ -71,11 +71,16 @@ def scene(track_centre=0.0, half_width=0.40, cone=None, curve=0.0):
         cd, clat = cone
         row = int(round(C.distance_to_row(cd, W, H)))
         col = int(round(C.lateral_to_column(clat, cd, W, H)))
-        # 0.18 m wide, 0.38 m tall, projected at that distance
+        # 0.135 m wide, 0.23 m tall -- the collision box of cone1.dae in the
+        # simulator's world file, not a guess. The first version drew them
+        # 0.18 x 0.38 m, half again as wide and two thirds taller than the
+        # real thing, which made every avoidance case easier than the track
+        # will be: a cone that fills more of the frame is found sooner and
+        # blocks more columns once found.
         fx, fy, _cx, _cy = C.intrinsics(W, H)
         z = max(cd - C.CAM_FORWARD, 1e-6)
-        half_px = int(round(0.09 * fx / z))
-        tall_px = int(round(0.38 * fy / z))
+        half_px = int(round(0.0675 * fx / z))
+        tall_px = int(round(0.23 * fy / z))
         cv2.rectangle(img, (col - half_px, row - tall_px), (col + half_px, row),
                       CONE, -1)
     return cv2.cvtColor(img, cv2.COLOR_BGR2HSV)

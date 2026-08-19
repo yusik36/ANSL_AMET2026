@@ -145,6 +145,7 @@ class PlannerNode(Node):
         self.last_image_time = time.time()
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        
         speed, steer, dbg = C.plan(
             hsv, self.speed, self.aggression, self.gain, self.base,
             min_range=self.min_range, max_range=self.max_range,
