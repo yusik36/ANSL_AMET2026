@@ -50,6 +50,7 @@ TUNABLES = {
     'planner_node': (
         'physicar_planner', 'planner_node',
         ('aggression', 'lookahead_gain', 'lookahead_base', 'max_range',
+         'max_accel', 'max_decel',
          'max_lateral_slope', 'road_h_min', 'road_h_max', 'paint_s_max', 'paint_v_min',
          'mark_h_min', 'mark_h_max', 'mark_s_min', 'max_span',
          'speed_cap', 'debug'),

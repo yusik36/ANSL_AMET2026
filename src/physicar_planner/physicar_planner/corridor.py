@@ -87,6 +87,20 @@ DEFAULT_MIN_RANGE = 0.35    # nearer than this the camera sees mostly bumper
 DEFAULT_MAX_RANGE = 2.5     # where the measured range error passes 0.25 m
 DEFAULT_SAMPLES = 14
 
+# --- how fast the command itself may change ---
+# The planner used to publish whatever speed the corridor allowed, the
+# instant it allowed it. From the start line that meant 0 to 3 m/s inside
+# 200 ms while also asking for 10 degrees of steering, and the car left the
+# track sideways after 1.1 m. It had not misread the track: it read a clear
+# corridor and demanded more of the car in one step than any car can give.
+#
+# So the commanded speed is a ramp, not a step. Braking is allowed to be
+# harder than accelerating because braking is the safe direction to be wrong
+# in -- a stop that comes too fast costs time, one that comes too slow costs
+# the run.
+MAX_ACCEL = 2.0             # m/s^2
+MAX_DECEL = 5.0             # m/s^2
+
 
 def intrinsics(w, h):
     return FX * w / CAL_W, FY * h / CAL_H, CX * w / CAL_W, CY * h / CAL_H
@@ -359,6 +373,15 @@ def speed_for(radius, a_lat, max_speed=MAX_SPEED):
     return min(max_speed, math.sqrt(max(a_lat, 0.0) * radius))
 
 
+def ramp(target, current, dt, accel=MAX_ACCEL, decel=MAX_DECEL):
+    """Move the commanded speed toward the target at a bounded rate."""
+    if dt <= 0.0:
+        return current
+    if target > current:
+        return min(target, current + accel * dt)
+    return max(target, current - decel * dt)
+
+
 def lookahead_for(speed, gain, base):
     """Ld = gain*v + base.
 
@@ -366,6 +389,14 @@ def lookahead_for(speed, gain, base):
     car oscillates at speed, too long and it cuts corners. Cutting is what
     this track needs -- its centre line is tighter than the car's minimum
     turn radius -- so the base is not apologetic about being generous.
+
+    The base matters more than it looks, because pure pursuit's sensitivity
+    to a lateral error goes as 2*L/Ld^2. At the old base of 0.45 m that is
+    1.78 rad per metre, so being 10 cm off centre -- which the car is, at
+    rest, at the start line -- asked for 10 degrees of steering before it had
+    moved at all. At 0.70 m the same error asks for 3.7 degrees. The number
+    below is not a preference about cornering style; it is what keeps the
+    controller's gain finite where the speed term contributes nothing.
     """
     return max(0.2, gain * speed + base)
 

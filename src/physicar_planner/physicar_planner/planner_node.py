@@ -65,7 +65,9 @@ class PlannerNode(Node):
 
         self.declare_parameter('aggression', 4.0)
         self.declare_parameter('lookahead_gain', 0.35)
-        self.declare_parameter('lookahead_base', 0.45)
+        self.declare_parameter('lookahead_base', 0.70)
+        self.declare_parameter('max_accel', C.MAX_ACCEL)
+        self.declare_parameter('max_decel', C.MAX_DECEL)
         self.declare_parameter('min_range', C.DEFAULT_MIN_RANGE)
         self.declare_parameter('max_range', C.DEFAULT_MAX_RANGE)
         self.declare_parameter('samples', C.DEFAULT_SAMPLES)
@@ -92,6 +94,8 @@ class PlannerNode(Node):
         self.aggression = g('aggression')
         self.gain = g('lookahead_gain')
         self.base = g('lookahead_base')
+        self.max_accel = g('max_accel')
+        self.max_decel = g('max_decel')
         self.min_range = g('min_range')
         self.max_range = g('max_range')
         self.samples = int(g('samples'))
@@ -115,10 +119,15 @@ class PlannerNode(Node):
         self.create_subscription(Image, 'image_raw', self.on_image,
                                  qos_profile_sensor_data)
 
+        # speed is what is published; target_speed is what the corridor
+        # allows. They are separate because the gap between them has to be
+        # crossed at a bounded rate -- see on_tick.
         self.speed = 0.0
+        self.target_speed = 0.0
         self.steering = 0.0
         self.valid = False
         self.last_image_time = 0.0
+        self.last_tick = time.time()
         self.create_timer(1.0 / PUBLISH_RATE_HZ, self.on_tick)
 
         self.get_logger().info(
@@ -144,7 +153,9 @@ class PlannerNode(Node):
             block=(self.road_h, self.paint, self.mark))
 
         self.valid = dbg['target'] is not None
-        self.speed = min(speed, self.speed_cap)
+        # The corridor's verdict is a target, not a command: on_tick decides
+        # how fast the car is allowed to approach it.
+        self.target_speed = min(speed, self.speed_cap)
         self.steering = steer
 
         if self.debug:
@@ -160,9 +171,22 @@ class PlannerNode(Node):
         # Published on a timer rather than per frame so a dead camera shows
         # up as a stream of zeros, not as silence that something downstream
         # might read as "no news".
-        fresh = (time.time() - self.last_image_time) < IMAGE_STALE_S
+        now = time.time()
+        dt = min(max(now - self.last_tick, 0.0), 0.2)
+        self.last_tick = now
+
+        fresh = (now - self.last_image_time) < IMAGE_STALE_S
         if not fresh:
-            self.speed, self.steering, self.valid = 0.0, 0.0, False
+            self.target_speed, self.steering, self.valid = 0.0, 0.0, False
+
+        # Ramp rather than jump. Publishing the corridor's verdict directly
+        # meant the first frame that saw a clear track commanded 2 m/s from a
+        # standstill and the car was at the 3 m/s cap 200 ms later, still
+        # turning out of the start box. Rate-limiting here rather than in
+        # plan() keeps the ramp on the 20 Hz clock, so a camera that skips a
+        # frame slows the car's response instead of jerking it.
+        self.speed = C.ramp(self.target_speed, self.speed, dt,
+                            self.max_accel, self.max_decel)
         self.speed_pub.publish(Float64(data=float(self.speed)))
         self.steer_pub.publish(Float64(data=float(self.steering)))
         self.valid_pub.publish(Bool(data=bool(self.valid)))

@@ -81,7 +81,9 @@ def scene(track_centre=0.0, half_width=0.40, cone=None, curve=0.0):
     return cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
 
-def run(hsv, speed=1.5, a_lat=4.0, gain=0.35, base=0.45):
+def run(hsv, speed=1.5, a_lat=4.0, gain=0.35, base=0.70):
+    # base matches planner_node's default on purpose: a suite tuned to
+    # different numbers than the ones that ship tests a planner nobody runs.
     return C.plan(hsv, speed, a_lat, gain, base)
 
 
@@ -177,6 +179,42 @@ def main():
     fast = run(scene(curve=0.40), a_lat=8.0)[0]
     check('higher a_lat is faster in a curve', fast > slow,
           '%.2f vs %.2f m/s' % (fast, slow))
+
+    # The launch defect: on the first frame that saw a clear corridor the
+    # planner commanded 2.02 m/s from a standstill and was at the 3 m/s cap
+    # 200 ms later, while asking for 10 degrees of steering. The car left the
+    # track sideways after 1.1 m. Both halves are checked here.
+    print('\nthe command ramps instead of stepping')
+    v, tick = 0.0, 0.05                       # the node's 20 Hz timer
+    for _ in range(4):
+        v = C.ramp(3.0, v, tick)
+    check('0 -> 3.0 m/s takes longer than 200 ms', v < 1.0,
+          'reached %.2f m/s in 200 ms' % v)
+    check('braking is allowed to be harder than accelerating',
+          C.MAX_DECEL > C.MAX_ACCEL,
+          '%.1f vs %.1f m/s^2' % (C.MAX_DECEL, C.MAX_ACCEL))
+    v = 3.0
+    for _ in range(int(1.0 / tick)):
+        v = C.ramp(0.0, v, tick)
+    check('a stop request still stops within a second', v == 0.0,
+          '%.2f m/s' % v)
+    v = C.ramp(1.0, 1.0, tick)
+    check('holds a steady target', abs(v - 1.0) < 1e-9)
+    check('dt of zero cannot move the command',
+          C.ramp(3.0, 0.5, 0.0) == 0.5)
+
+    # Pure pursuit's sensitivity to a lateral error goes as 2*L/Ld^2, so the
+    # lookahead at a standstill sets how violently the car launches. At the
+    # old base of 0.45 m, 10 cm off centre asked for 10 degrees before the
+    # car had moved.
+    print('\nsteering gain at rest is not violent')
+    for base, want in ((0.45, False), (0.70, True)):
+        st, _r = C.pure_pursuit((C.lookahead_for(0.0, 0.35, base), 0.10))
+        deg = math.degrees(st)
+        check('base %.2f m: 10 cm off centre -> %.1f deg%s'
+              % (base, deg, '' if want else '  (the old default)'),
+              (deg < 6.0) == want, 'gain %.2f rad/m'
+              % (2.0 * C.WHEELBASE / C.lookahead_for(0.0, 0.35, base) ** 2))
 
     print('\nlookahead grows with speed')
     check('Ld(0.5) < Ld(2.5)',
