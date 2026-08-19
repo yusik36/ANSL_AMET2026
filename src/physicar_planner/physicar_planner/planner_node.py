@@ -30,8 +30,17 @@ Parameters worth turning on race day, and nothing else:
   max_range         how far the corridor is believed. Measured at 2.5 m in
                     the simulator; past 3 m the range error exceeds the
                     track's own half-width.
-  block_h_min/max   the "not drivable" colour window. Measured, not guessed
-  block_s_min       -- re-measure on the real venue with hsv_calibrate_node.
+  road_h_min/max    the road's hue window. Everything outside it is an
+                    obstacle, so this is the first thing to re-measure at the
+                    venue -- its floor is not the simulator's grass and may
+                    sit much closer to the track's own colour.
+  paint_s_max       white edge paint: grey enough that hue means nothing, so
+  paint_v_min       it is matched on being desaturated and bright.
+  mark_h_min/max    the centre marking. The real track may not have one, or
+  mark_s_min        may mark it differently; widen or disable accordingly.
+  max_span          free spans wider than this are lost edges, not corridor.
+                    Scales with track width, so it changes if the venue's
+                    track is not 0.7-0.9 m across.
 """
 import time
 
@@ -61,9 +70,21 @@ class PlannerNode(Node):
         self.declare_parameter('max_range', C.DEFAULT_MAX_RANGE)
         self.declare_parameter('samples', C.DEFAULT_SAMPLES)
         self.declare_parameter('max_lateral_slope', C.MAX_LATERAL_SLOPE)
-        self.declare_parameter('block_h_min', C.BLOCK_H_MIN)
-        self.declare_parameter('block_h_max', C.BLOCK_H_MAX)
-        self.declare_parameter('block_s_min', C.BLOCK_S_MIN)
+        # Every colour bound is a parameter, not a constant. The venue will
+        # not look like the simulator: its track is a different surface under
+        # different light, there is no grass beside it but an exhibition-hall
+        # floor, and the purple boundary wall does not exist at all. What has
+        # to survive is the shape of the rule -- road is one cluster, the
+        # paint on it is another, everything else is an obstacle -- while
+        # every number in it gets re-measured on site.
+        self.declare_parameter('road_h_min', C.ROAD_H_MIN)
+        self.declare_parameter('road_h_max', C.ROAD_H_MAX)
+        self.declare_parameter('paint_s_max', C.PAINT_S_MAX)
+        self.declare_parameter('paint_v_min', C.PAINT_V_MIN)
+        self.declare_parameter('mark_h_min', C.MARK_H_MIN)
+        self.declare_parameter('mark_h_max', C.MARK_H_MAX)
+        self.declare_parameter('mark_s_min', C.MARK_S_MIN)
+        self.declare_parameter('max_span', C.MAX_PLAUSIBLE_SPAN)
         self.declare_parameter('speed_cap', C.MAX_SPEED)
         self.declare_parameter('debug', False)
 
@@ -75,8 +96,11 @@ class PlannerNode(Node):
         self.max_range = g('max_range')
         self.samples = int(g('samples'))
         self.max_slope = g('max_lateral_slope')
-        self.block = (int(g('block_h_min')), int(g('block_h_max')),
-                      int(g('block_s_min')))
+        self.road_h = (int(g('road_h_min')), int(g('road_h_max')))
+        self.paint = (int(g('paint_s_max')), int(g('paint_v_min')))
+        self.mark = (int(g('mark_h_min')), int(g('mark_h_max')),
+                     int(g('mark_s_min')))
+        self.max_span = g('max_span')
         self.speed_cap = g('speed_cap')
         self.debug = g('debug')
 
@@ -99,9 +123,9 @@ class PlannerNode(Node):
 
         self.get_logger().info(
             'planner_node ready: aggression %.1f m/s^2, Ld = %.2f*v + %.2f, '
-            'corridor %.2f-%.2f m, block H %d-%d S>=%d'
+            'corridor %.2f-%.2f m, road hue %d-%d, spans over %.2f m ignored'
             % (self.aggression, self.gain, self.base, self.min_range,
-               self.max_range, self.block[0], self.block[1], self.block[2]))
+               self.max_range, self.road_h[0], self.road_h[1], self.max_span))
 
     def on_image(self, msg: Image):
         try:
@@ -115,7 +139,9 @@ class PlannerNode(Node):
         speed, steer, dbg = C.plan(
             hsv, self.speed, self.aggression, self.gain, self.base,
             min_range=self.min_range, max_range=self.max_range,
-            samples=self.samples, block=self.block, max_slope=self.max_slope)
+            samples=self.samples, max_slope=self.max_slope,
+            max_span=self.max_span,
+            block=(self.road_h, self.paint, self.mark))
 
         self.valid = dbg['target'] is not None
         self.speed = min(speed, self.speed_cap)

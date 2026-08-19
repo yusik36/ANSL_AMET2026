@@ -12,7 +12,8 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 TUNABLES = ('aggression', 'lookahead_gain', 'lookahead_base', 'max_range',
-            'max_lateral_slope', 'block_h_min', 'block_h_max', 'block_s_min',
+            'max_lateral_slope', 'road_h_min', 'road_h_max', 'paint_s_max', 'paint_v_min',
+         'mark_h_min', 'mark_h_max', 'mark_s_min', 'max_span',
             'speed_cap', 'debug')
 
 
@@ -35,8 +36,9 @@ def _build(context, *_a, **_k):
     for n in TUNABLES:
         v = _parse(LaunchConfiguration(n).perform(context))
         if v is not None:
-            # These three are counts, not distances; rclpy is strict about it.
-            if n in ('block_h_min', 'block_h_max', 'block_s_min') and \
+            # HSV bounds are counts, not distances; rclpy is strict about it.
+            if n in ('road_h_min', 'road_h_max', 'paint_s_max', 'paint_v_min',
+                     'mark_h_min', 'mark_h_max', 'mark_s_min') and \
                     isinstance(v, float):
                 v = int(v)
             params[n] = v

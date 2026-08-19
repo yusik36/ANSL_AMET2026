@@ -22,11 +22,12 @@ W, H = 480, 360
 FAILURES = []
 
 # Measured HSV, as BGR for drawing.
-ROAD = cv2.cvtColor(np.uint8([[[106, 80, 90]]]), cv2.COLOR_HSV2BGR)[0][0].tolist()
-GRASS = cv2.cvtColor(np.uint8([[[35, 140, 148]]]), cv2.COLOR_HSV2BGR)[0][0].tolist()
+ROAD = cv2.cvtColor(np.uint8([[[107, 112, 76]]]), cv2.COLOR_HSV2BGR)[0][0].tolist()
+GRASS = cv2.cvtColor(np.uint8([[[35, 118, 167]]]), cv2.COLOR_HSV2BGR)[0][0].tolist()
 CONE = cv2.cvtColor(np.uint8([[[60, 245, 165]]]), cv2.COLOR_HSV2BGR)[0][0].tolist()
-WHITE = cv2.cvtColor(np.uint8([[[24, 6, 220]]]), cv2.COLOR_HSV2BGR)[0][0].tolist()
-ORANGE = cv2.cvtColor(np.uint8([[[18, 247, 227]]]), cv2.COLOR_HSV2BGR)[0][0].tolist()
+WHITE = cv2.cvtColor(np.uint8([[[24, 8, 231]]]), cv2.COLOR_HSV2BGR)[0][0].tolist()
+ORANGE = cv2.cvtColor(np.uint8([[[17, 236, 216]]]), cv2.COLOR_HSV2BGR)[0][0].tolist()
+WALL = cv2.cvtColor(np.uint8([[[141, 95, 70]]]), cv2.COLOR_HSV2BGR)[0][0].tolist()
 
 
 def check(name, ok, detail=''):
@@ -85,18 +86,21 @@ def run(hsv, speed=1.5, a_lat=4.0, gain=0.35, base=0.45):
 
 
 def main():
-    print('block rule: H %d-%d, S >= %d' % (C.BLOCK_H_MIN, C.BLOCK_H_MAX,
-                                            C.BLOCK_S_MIN))
+    print('drivable rule: road H %d-%d | paint S<=%d V>=%d | dashes H %d-%d S>=%d'
+          % (C.ROAD_H_MIN, C.ROAD_H_MAX, C.PAINT_S_MAX, C.PAINT_V_MIN,
+             C.MARK_H_MIN, C.MARK_H_MAX, C.MARK_S_MIN))
     print('corridor sampled %.2f-%.2f m\n' % (C.DEFAULT_MIN_RANGE,
                                               C.DEFAULT_MAX_RANGE))
 
     print('the measured colours are classified as intended')
     for name, hsvpx, want_blocked in (
-            ('road   H106 S80', (106, 80, 90), False),
-            ('white  H24  S6 ', (24, 6, 220), False),
-            ('orange H18  S247', (18, 247, 227), False),
-            ('grass  H35  S140', (35, 140, 148), True),
-            ('cone   H60  S245', (60, 245, 165), True)):
+            ('road   H107 S112', (107, 112, 76), False),
+            ('white  H24  S8  ', (24, 8, 231), False),
+            ('orange H17  S236', (17, 236, 216), False),
+            ('grass  H35  S118', (35, 118, 167), True),
+            ('cone   H60  S245', (60, 245, 165), True),
+            ('wall   H141 S95 ', (141, 95, 70), True),
+            ('unseen H160 S200', (160, 200, 200), True)):
         px = np.uint8([[list(hsvpx)]])
         got = bool(C.blocked_mask(px)[0][0])
         check('%s -> %s' % (name, 'blocked' if want_blocked else 'drivable'),

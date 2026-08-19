@@ -18,26 +18,29 @@ So the corridor is trustworthy to about 2.5 m and falls apart past 3 m --
 0.50 m of range error is larger than the track's own half-width. DEFAULT_MAX
 below is set from that measurement, not from what would be convenient.
 
-Surface colours, read off the frame rather than assumed:
+Surface colours, sampled from a frame taken at the start line with the car
+stationary and the whole stack stopped -- earlier readings were taken while
+the car sat nose-first against a wall and described nothing but the wall:
 
-    road            H 106      S  61-93    V  74-104
-    white edge line H  24      S   6       V 220
-    grass           H  31-40   S 120-154   V 148
-    cone            H  60      S 240-252   V 149-180
-    orange dashes   H  18      S 247       V 227
+    surface          hue        sat        val      share of lower frame
+    road             105-109    112 +-5     76 +-5      69.3%
+    grass             30- 39    118-129    159-167      17.0%
+    white edge line   20- 29      6- 10    231           6.9%
+    orange dashes     15- 19    236        216           2.0%
+    boundary wall    141         95         70          (measured separately)
 
-WHY ONE RULE HANDLES BOTH GRASS AND CONES
+NAME THE ROAD, NOT THE GRASS
 
-Grass and cones are both green-ish and saturated; road, white paint and
-orange paint are not. So "green-ish and saturated means not drivable" marks
-the track edges and the obstacles in a single pass, and a cone becomes
-simply a place where the corridor is narrower. There is no obstacle mode to
-enter and no control to hand back -- the thing that made the previous
-avoid/lane split fragile stops existing.
+The first version blocked what looked like grass. That reads well and fails
+badly: everything which is not grass then counts as road. The boundary wall
+is H 141, outside the blocked band, so the planner classified a wall as
+drivable and the car went into it at 3 m/s.
 
-The thresholds sit between the measured clusters with room either side:
-orange paint at H 18 stays below the band, road at H 106 stays above it, and
-white paint fails the saturation test outright.
+So the rule states what the road is -- its hue, plus the white and orange
+paint that lie on it -- and blocks everything else. Grass, cones, walls and
+any surface nobody has looked at all come out as obstacles, which is the
+safe direction to be wrong in. A cone is then just a place where the
+corridor is narrower: no obstacle mode to enter, no control to hand back.
 """
 import math
 
@@ -55,8 +58,23 @@ CAR_HALF_WIDTH = 0.08
 MAX_STEER = math.radians(20.0)
 MAX_SPEED = 3.0
 
-# --- the "not drivable" rule, from the measured colours above ---
-BLOCK_H_MIN, BLOCK_H_MAX, BLOCK_S_MIN = 25, 90, 100
+# --- the drivable rule, from the measured colours above ---
+# Stated as "what the road looks like", not "what grass looks like". The
+# first version blocked green things, which meant everything that is not
+# green counted as road: the boundary wall reads H 141 and was classified
+# drivable, so the car took a wall for track and drove into it at 3 m/s.
+# Naming the road instead makes an unrecognised surface an obstacle, which
+# is the safe direction to be wrong in.
+ROAD_H_MIN, ROAD_H_MAX = 95, 125     # measured 105-109, wall sits at 141
+PAINT_S_MAX, PAINT_V_MIN = 40, 150   # white lines: S 6-10, V 231
+MARK_H_MIN, MARK_H_MAX, MARK_S_MIN = 10, 25, 150   # orange dashes: H 15-19, S 236
+
+# A free span cannot be wider than the track. Beyond about 2 m the edges
+# are only ~50 px from centre and a gap in the mask lets the scan run to the
+# frame edge, returning spans of 1.9-2.1 m on a 0.7 m track. Those readings
+# are not wide corridors, they are lost edges, and left in they drag the
+# curvature fit hard enough to report a bend on a straight.
+MAX_PLAUSIBLE_SPAN = 1.2             # track measures 0.70-0.87 m
 
 # How fast the car's lateral position can change per metre travelled. A
 # stand-in for the vehicle's turning ability in the sweep below: at the
@@ -93,14 +111,28 @@ def lateral_to_column(lat, d, w, h):
     return cx - lat * fx / z
 
 
-def blocked_mask(hsv, h_min=BLOCK_H_MIN, h_max=BLOCK_H_MAX, s_min=BLOCK_S_MIN):
-    """True where the surface is not drivable: grass verges and cones alike."""
+def blocked_mask(hsv, road_h=(ROAD_H_MIN, ROAD_H_MAX),
+                 paint=(PAINT_S_MAX, PAINT_V_MIN),
+                 mark=(MARK_H_MIN, MARK_H_MAX, MARK_S_MIN)):
+    """True wherever the surface is not recognisably road.
+
+    Three things count as drivable, all measured off a frame at the start
+    line: the road itself (H 105-109), the white edge paint (S 6-10, V 231 --
+    too grey for hue to mean anything, so it is matched on that), and the
+    orange centre dashes (H 15-19, S 236). Everything else blocks: grass at
+    H 30-39, cones at H 60 with S 240+, the boundary wall at H 141, and
+    anything nobody has looked at yet.
+    """
     H = hsv[:, :, 0].astype(np.int16)
     S = hsv[:, :, 1].astype(np.int16)
-    return (H >= h_min) & (H <= h_max) & (S >= s_min)
+    V = hsv[:, :, 2].astype(np.int16)
+    road = (H >= road_h[0]) & (H <= road_h[1])
+    white = (S <= paint[0]) & (V >= paint[1])
+    dashes = (H >= mark[0]) & (H <= mark[1]) & (S >= mark[2])
+    return ~(road | white | dashes)
 
 
-def scan_corridor(blocked, w, h, ranges):
+def scan_corridor(blocked, w, h, ranges, max_span=MAX_PLAUSIBLE_SPAN):
     """Free width either side of the car's centre line, at each range.
 
     Scans outward from the centre column rather than inward from the frame
@@ -130,11 +162,17 @@ def scan_corridor(blocked, w, h, ranges):
         while right_col + 1 < w and not line[right_col + 1]:
             right_col += 1
 
-        # A span that reaches the frame edge is not a measurement of the
-        # track, it is the camera running out of view, so it is reported as
-        # open and the caller decides what to do with that.
         left = column_to_lateral(left_col, d, w, h)
         right = column_to_lateral(right_col, d, w, h)
+        # A span wider than the track is not a wide corridor, it is a lost
+        # edge: past ~2 m the boundary is only tens of pixels from centre and
+        # one gap in the mask lets the scan run to the frame edge. Measured
+        # on a straight, those samples came back 1.86 m and 2.05 m on a
+        # 0.7 m track, and dragged the curvature fit into reporting a corner
+        # where there was none. Dropped rather than clamped: there is no
+        # information in them to keep.
+        if (left - right) > max_span:
+            continue
         out.append((d, right, left))
     return out
 
@@ -334,16 +372,16 @@ def lookahead_for(speed, gain, base):
 
 def plan(hsv, speed_now, a_lat, gain, base,
          min_range=DEFAULT_MIN_RANGE, max_range=DEFAULT_MAX_RANGE,
-         samples=DEFAULT_SAMPLES, block=(BLOCK_H_MIN, BLOCK_H_MAX, BLOCK_S_MIN),
-         max_slope=None):
+         samples=DEFAULT_SAMPLES, block=None, max_slope=None,
+         max_span=MAX_PLAUSIBLE_SPAN):
     """One frame in, (speed, steering, debug) out. None target means stop."""
     h, w = hsv.shape[:2]
     if max_slope is None:
         max_slope = MAX_LATERAL_SLOPE
-    blocked = blocked_mask(hsv, *block)
+    blocked = blocked_mask(hsv) if block is None else blocked_mask(hsv, *block)
     ld = lookahead_for(speed_now, gain, base)
     ranges = np.linspace(min_range, max_range, samples)
-    corridor = scan_corridor(blocked, w, h, ranges)
+    corridor = scan_corridor(blocked, w, h, ranges, max_span)
     target = pick_target(corridor, ld, max_slope)
     if target is None:
         return 0.0, 0.0, {'corridor': corridor, 'lookahead': ld, 'target': None}
